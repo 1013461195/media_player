@@ -1,34 +1,98 @@
-# Gradle files
-.gradle/
+# ==========================================
+# Flutter/Dart Core
+# ==========================================
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
 build/
+# 注意：如果是开发 App，建议将 pubspec.lock 提交到 Git，不要忽略它；
+# 如果是开发给别人用的 Flutter Package/Plugin，则取消下面这行的注释。
+# pubspec.lock
 
-# Local configuration file (sdk path, etc)
-local.properties
-
-# Log/OS Files
+# ==========================================
+# OS & Misc Files
+# ==========================================
+.DS_Store
 *.log
+*.swp
+.env  # 忽略环境变量配置，防止 API Key 等机密泄露
 
-# Android Studio generated files and folders
-captures/
-.externalNativeBuild/
-.cxx/
-*.aab
-*.apk
-output-metadata.json
-
-# IntelliJ
+# ==========================================
+# IDEs (Android Studio / IntelliJ / VS Code)
+# ==========================================
 *.iml
 .idea/
 misc.xml
 deploymentTargetDropDown.xml
 render.experimental.xml
+.vscode/
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
 
-# Keystore files
+# ==========================================
+# Android
+# ==========================================
+**/android/.gradle/
+**/android/local.properties
+**/android/app/debug/
+**/android/app/profile/
+**/android/app/release/
+**/android/**/GeneratedPluginRegistrant.java
+
+# Android Studio generated files and Profiling
+captures/
+.externalNativeBuild/
+.cxx/
+*.hprof
+
+# Android Build Outputs
+*.aab
+*.apk
+output-metadata.json
+
+# Keystore & Google Services (Security)
 *.jks
 *.keystore
-
-# Google Services (e.g. APIs or Firebase)
 google-services.json
 
-# Android Profiling
-*.hprof
+# ==========================================
+# iOS & macOS (Xcode & CocoaPods)
+# ==========================================
+# Xcode personal settings and workspaces
+**/*.mode1v3
+**/*.mode2v3
+**/*.pbxuser
+**/*.perspectivev3
+**/*.xcuserstate
+**/*.xcworkspace/xcuserdata/
+**/*.xcodeproj/xcuserdata/
+
+# Flutter iOS/macOS build artifacts
+**/ios/Flutter/.last_build_id
+**/ios/Flutter/App.framework
+**/ios/Flutter/Flutter.framework
+**/ios/Flutter/Flutter.podspec
+**/ios/Flutter/Generated.xcconfig
+**/ios/Flutter/app.flx
+**/ios/Flutter/app.zip
+**/ios/Flutter/flutter_assets/
+**/ios/Flutter/flutter_export_environment.sh
+**/macos/Flutter/GeneratedPluginRegistrant.swift
+**/macos/Flutter/ephemeral/
+
+# CocoaPods
+**/ios/Pods/
+**/ios/.symlinks/
+**/ios/ProfileData/
+**/macos/Pods/
+
+# ==========================================
+# Windows
+# ==========================================
+**/windows/x64/
+**/windows/Debug/
+**/windows/Release/
+**/windows/ARM64/

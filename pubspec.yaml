@@ -12,11 +12,11 @@ dependencies:
   media_kit: ^1.2.6
   media_kit_libs_video: ^1.0.7
   media_kit_video: ^2.0.1
-  video_thumbnail: ^0.5.6
   flutter_secure_storage: ^10.3.1
   screen_brightness: ^2.1.8
   smb_connect: ^0.0.9
   volume_controller: ^3.5.0
+  get_thumbnail_video: ^0.7.3
 
 dev_dependencies:
   flutter_test:

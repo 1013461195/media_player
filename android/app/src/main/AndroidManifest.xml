@@ -25,5 +25,10 @@
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />
+        <provider
+            android:name=".smb.SmbContentProvider"
+            android:authorities="com.huangjx.media_play.smb.provider"
+            android:exported="true"
+            android:grantUriPermissions="true" />
     </application>
 </manifest>

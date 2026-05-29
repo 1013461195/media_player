@@ -5,13 +5,14 @@ import com.hierynomus.msdtyp.FileTime
 import com.hierynomus.mssmb2.SMB2CreateDisposition
 import com.hierynomus.mssmb2.SMB2CreateOptions
 import com.hierynomus.mssmb2.SMB2ShareAccess
+import com.hierynomus.msfscc.fileinformation.FileStandardInformation
+import com.hierynomus.msfscc.FileAttributes
 import com.hierynomus.smbj.SMBClient
 import com.hierynomus.smbj.SmbConfig
 import com.hierynomus.smbj.auth.AuthenticationContext
 import com.hierynomus.smbj.connection.Connection
 import com.hierynomus.smbj.session.Session
 import com.hierynomus.smbj.share.DiskShare
-import com.hierynomus.smbj.smb2.info.FileStandardInformation
 import java.io.InputStream
 import java.util.EnumSet
 import java.util.UUID
@@ -45,6 +46,30 @@ class SmbConnection(
     }
 }
 
+/**
+ * Wraps a SMBJ File for efficient random-access reading.
+ * Uses File.read(buffer, fileOffset, ...) instead of InputStream.skip().
+ */
+class SmbFileHandle(private val file: com.hierynomus.smbj.share.File) : AutoCloseable {
+    /** File size in bytes, read once on open. */
+    val size: Long by lazy {
+        val info = file.getFileInformation(FileStandardInformation::class.java)
+        info.endOfFile
+    }
+
+    /**
+     * Reads up to [length] bytes starting at [fileOffset] into [buffer].
+     * Returns the number of bytes read, or -1 at end of file.
+     */
+    fun readAt(fileOffset: Long, buffer: ByteArray, offset: Int, length: Int): Int {
+        return file.read(buffer, fileOffset, offset, length)
+    }
+
+    override fun close() {
+        try { file.close() } catch (_: Exception) {}
+    }
+}
+
 class SmbService {
 
     private val sessions = ConcurrentHashMap<String, SmbConnection>()
@@ -54,7 +79,10 @@ class SmbService {
      * The path provided to other methods should be in the form "shareName\folder\file".
      */
     fun connect(host: String, domain: String, username: String, password: String): String {
-        val config = SmbConfig.builder().build()
+        val config = SmbConfig.builder()
+            .withTimeout(30, java.util.concurrent.TimeUnit.SECONDS)  // connection timeout
+            .withSoTimeout(60, java.util.concurrent.TimeUnit.SECONDS) // socket timeout
+            .build()
         val client = SMBClient(config)
         val connection = client.connect(host)
         val ac = AuthenticationContext(username, password.toCharArray(), domain)
@@ -134,16 +162,35 @@ class SmbService {
         val file = share.openFile(
             filePath,
             EnumSet.of(AccessMask.GENERIC_READ),
-            emptySet(),
+            EnumSet.of(FileAttributes.FILE_ATTRIBUTE_NORMAL),
             EnumSet.of(SMB2ShareAccess.FILE_SHARE_READ),
-            EnumSet.of(SMB2CreateOptions.FILE_RANDOM_ACCESS),
-            SMB2CreateDisposition.FILE_OPEN
+            SMB2CreateDisposition.FILE_OPEN,
+            EnumSet.of(SMB2CreateOptions.FILE_RANDOM_ACCESS)
         )
         val stream = file.inputStream
         if (offset > 0) {
             stream.skip(offset)
         }
         return stream
+    }
+
+    /**
+     * Opens a file and returns a handle for random-access reading.
+     * Uses SMBJ's File.read(buffer, fileOffset, ...) for efficient seeking.
+     */
+    fun openFile(sessionId: String, path: String): SmbFileHandle {
+        val conn = getSession(sessionId)
+        val (shareName, filePath) = parsePath(path)
+        val share = conn.getOrConnectShare(shareName)
+        val file = share.openFile(
+            filePath,
+            EnumSet.of(AccessMask.GENERIC_READ),
+            EnumSet.of(FileAttributes.FILE_ATTRIBUTE_NORMAL),
+            EnumSet.of(SMB2ShareAccess.FILE_SHARE_READ),
+            SMB2CreateDisposition.FILE_OPEN,
+            EnumSet.of(SMB2CreateOptions.FILE_RANDOM_ACCESS)
+        )
+        return SmbFileHandle(file)
     }
 
     /**
@@ -157,10 +204,10 @@ class SmbService {
         val file = share.openFile(
             filePath,
             EnumSet.of(AccessMask.GENERIC_READ),
-            emptySet(),
+            EnumSet.of(FileAttributes.FILE_ATTRIBUTE_NORMAL),
             EnumSet.of(SMB2ShareAccess.FILE_SHARE_READ),
-            EnumSet.of(SMB2CreateOptions.FILE_RANDOM_ACCESS),
-            SMB2CreateDisposition.FILE_OPEN
+            SMB2CreateDisposition.FILE_OPEN,
+            EnumSet.of(SMB2CreateOptions.FILE_RANDOM_ACCESS)
         )
         try {
             val standardInfo = file.getFileInformation(FileStandardInformation::class.java)

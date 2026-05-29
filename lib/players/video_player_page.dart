@@ -100,7 +100,8 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
     final native = widget.nativeClient;
     final String uri;
     if (native != null && native.isConnected) {
-      uri = native.getContentUri(_file.path);
+      // Native HTTP server uses SMBJ — much faster than Dart smb_connect.
+      uri = await native.getHttpUrl(_file.path, _file.name);
     } else {
       uri = (await widget.streamServer.urlFor(_file)).toString();
     }
@@ -267,7 +268,12 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
       await Future<void>.delayed(const Duration(milliseconds: 300));
       final native = widget.nativeClient;
       if (native != null && native.isConnected) {
-        await native.deleteFile(_file.path);
+        try {
+          await native.deleteFile(_file.path);
+        } catch (e) {
+          debugPrint('[SMB Player] Native delete failed, falling back: $e');
+          await widget.client.delete(_file);
+        }
       } else {
         await widget.client.delete(_file);
       }
@@ -283,7 +289,9 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
         _prepareFuture = _prepareVideo();
         _isDeleting = false;
       });
-    } catch (error) {
+    } catch (error, stack) {
+      debugPrint('[SMB Player] Delete failed: $error');
+      debugPrint('[SMB Player] Stack trace: $stack');
       if (!mounted) {
         return;
       }

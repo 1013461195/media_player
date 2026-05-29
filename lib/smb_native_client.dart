@@ -92,6 +92,27 @@ class SmbNativeClient {
     return 'content://com.huangjx.media_play.smb.provider/$_sessionId/$encodedPath';
   }
 
+  Future<int> startHttpServer() async {
+    final port = await _channel.invokeMethod<int>('smbStartHttpServer');
+    if (port == null) throw Exception('Failed to start HTTP server');
+    return port;
+  }
+
+  Future<void> stopHttpServer() async {
+    await _channel.invokeMethod<void>('smbStopHttpServer');
+  }
+
+  Future<String> getHttpUrl(String path, String fileName) async {
+    _assertConnected();
+    final url = await _channel.invokeMethod<String>('smbGetHttpUrl', {
+      'sessionId': _sessionId,
+      'path': path,
+      'fileName': fileName,
+    });
+    if (url == null) throw Exception('Failed to get HTTP URL');
+    return url;
+  }
+
   Future<void> disconnect() async {
     if (_sessionId == null) return;
     try {

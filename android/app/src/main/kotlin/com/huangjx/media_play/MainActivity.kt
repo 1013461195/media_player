@@ -7,6 +7,7 @@ import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 import com.huangjx.media_play.smb.SmbService
 import com.huangjx.media_play.smb.SmbContentProvider
+import com.huangjx.media_play.smb.NativeSmbHttpServer
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -17,6 +18,7 @@ class MainActivity : FlutterActivity() {
     private val SMB_CHANNEL = "com.huangjx.media_play/smb"
 
     private val smbService = SmbService()
+    private val httpServer = NativeSmbHttpServer(smbService)
     private val scope = CoroutineScope(Dispatchers.IO)
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
@@ -112,6 +114,33 @@ class MainActivity : FlutterActivity() {
                         result.success(uri.toString())
                     } catch (e: Exception) {
                         result.error("SMB_URI_ERROR", e.message, null)
+                    }
+                }
+                "smbStartHttpServer" -> {
+                    try {
+                        val port = httpServer.start()
+                        result.success(port)
+                    } catch (e: Exception) {
+                        result.error("SMB_HTTP_START_ERROR", e.message, null)
+                    }
+                }
+                "smbStopHttpServer" -> {
+                    try {
+                        httpServer.stop()
+                        result.success(null)
+                    } catch (e: Exception) {
+                        result.error("SMB_HTTP_STOP_ERROR", e.message, null)
+                    }
+                }
+                "smbGetHttpUrl" -> {
+                    val sessionId = call.argument<String>("sessionId") ?: ""
+                    val path = call.argument<String>("path") ?: ""
+                    val fileName = call.argument<String>("fileName") ?: ""
+                    try {
+                        val url = httpServer.buildUrl(sessionId, path, fileName)
+                        result.success(url)
+                    } catch (e: Exception) {
+                        result.error("SMB_HTTP_URL_ERROR", e.message, null)
                     }
                 }
                 else -> {

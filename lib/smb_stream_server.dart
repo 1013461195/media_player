@@ -67,12 +67,12 @@ Future<Uint8List> readSmbBytes(SmbConnect client, SmbFile file) async {
 
 // Chunk-based cache for SMB file reads
 class _ChunkCache {
-  static const int chunkSize = 512 * 1024; // 512KB per chunk
+  static const int chunkSize = 2 * 1024 * 1024; // 2MB per chunk
   final Map<int, Uint8List> _cache = {};
   final int _maxChunks;
   final List<int> _accessOrder = [];
 
-  _ChunkCache({int maxChunks = 64}) : _maxChunks = maxChunks;
+  _ChunkCache({int maxChunks = 32}) : _maxChunks = maxChunks;
 
   Uint8List? get(int chunkIndex) {
     final data = _cache[chunkIndex];
@@ -112,8 +112,11 @@ class LocalSmbStreamServer {
         )
         .replaceAll('=', '');
     _files[token] = file;
-    _caches[token] = _ChunkCache();
+    final cache = _ChunkCache();
+    _caches[token] = cache;
     final server = _server!;
+    // Pre-read first chunk so playback starts instantly
+    unawaited(_readChunk(file, cache, 0));
     return Uri(
       scheme: 'http',
       host: server.address.address,
@@ -221,11 +224,17 @@ class LocalSmbStreamServer {
       final chunkSize = _ChunkCache.chunkSize;
       final startChunk = range.start ~/ chunkSize;
       final endChunk = range.endInclusive ~/ chunkSize;
+      final totalChunks = (file.size + chunkSize - 1) ~/ chunkSize;
 
       for (var i = startChunk; i <= endChunk; i++) {
         final chunkData = await _readChunk(file, cache, i);
         final chunkStart = i * chunkSize;
         final chunkEnd = chunkStart + chunkData.length;
+
+        // Prefetch next chunk in background
+        if (i + 1 < totalChunks && cache.get(i + 1) == null) {
+          unawaited(_readChunk(file, cache, i + 1));
+        }
 
         // Calculate the overlap with the requested range
         final readStart =

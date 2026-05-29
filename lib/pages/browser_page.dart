@@ -41,6 +41,8 @@ class BrowserPage extends StatefulWidget {
 }
 
 class _BrowserPageState extends State<BrowserPage> with WidgetsBindingObserver {
+  static const int _pageSize = 20;
+
   final List<SmbFile> _stack = [];
   late SmbConnect _client;
   late LocalSmbStreamServer _streamServer;
@@ -51,6 +53,12 @@ class _BrowserPageState extends State<BrowserPage> with WidgetsBindingObserver {
   FileListViewMode _viewMode = FileListViewMode.detail;
   int _loadGeneration = 0;
   Future<void>? _reconnectFuture;
+
+  // Pagination state
+  List<SmbFile> _allItems = [];
+  List<SmbFile> _displayItems = [];
+  bool _hasMore = false;
+  bool _isLoadingMore = false;
 
   SmbFile? get _currentFolder => _stack.isEmpty ? null : _stack.last;
 
@@ -65,15 +73,23 @@ class _BrowserPageState extends State<BrowserPage> with WidgetsBindingObserver {
   }
 
   Future<void> _connectNative() async {
-    try {
-      await _nativeClient.connect(
-        host: widget.server.host,
-        domain: widget.server.domain,
-        username: widget.server.username,
-        password: widget.server.password,
-      );
-    } catch (e) {
-      debugPrint('Native SMB connect failed: $e');
+    for (var attempt = 1; attempt <= 3; attempt++) {
+      try {
+        await _nativeClient.connect(
+          host: widget.server.host,
+          domain: widget.server.domain,
+          username: widget.server.username,
+          password: widget.server.password,
+        );
+        await _nativeClient.startHttpServer();
+        debugPrint('Native SMB connected (attempt $attempt)');
+        return;
+      } catch (e) {
+        debugPrint('Native SMB connect failed (attempt $attempt): $e');
+        if (attempt < 3) {
+          await Future<void>.delayed(Duration(seconds: attempt * 2));
+        }
+      }
     }
   }
 
@@ -84,6 +100,7 @@ class _BrowserPageState extends State<BrowserPage> with WidgetsBindingObserver {
     WidgetsBinding.instance.removeObserver(this);
     unawaited(_streamServer.close());
     unawaited(_client.close());
+    unawaited(_nativeClient.stopHttpServer());
     unawaited(_nativeClient.disconnect());
     super.dispose();
   }
@@ -208,7 +225,22 @@ class _BrowserPageState extends State<BrowserPage> with WidgetsBindingObserver {
       return;
     }
     setState(() {
+      _allItems = [];
+      _displayItems = [];
+      _hasMore = false;
+      _isLoadingMore = false;
       _itemsFuture = _startItemsLoad(reconnect: reconnect);
+    });
+  }
+
+  void _loadMore() {
+    if (_isLoadingMore || !_hasMore) return;
+    _isLoadingMore = true;
+    final nextEnd = (_displayItems.length + _pageSize).clamp(0, _allItems.length);
+    setState(() {
+      _displayItems = _allItems.sublist(0, nextEnd);
+      _hasMore = nextEnd < _allItems.length;
+      _isLoadingMore = false;
     });
   }
 
@@ -268,6 +300,10 @@ class _BrowserPageState extends State<BrowserPage> with WidgetsBindingObserver {
     }
     setState(() {
       _stack.removeLast();
+      _allItems = [];
+      _displayItems = [];
+      _hasMore = false;
+      _isLoadingMore = false;
       _itemsFuture = _startItemsLoad();
     });
     return false;
@@ -276,6 +312,10 @@ class _BrowserPageState extends State<BrowserPage> with WidgetsBindingObserver {
   void _openFolder(SmbFile folder) {
     setState(() {
       _stack.add(folder);
+      _allItems = [];
+      _displayItems = [];
+      _hasMore = false;
+      _isLoadingMore = false;
       _itemsFuture = _startItemsLoad();
     });
   }
@@ -351,7 +391,8 @@ class _BrowserPageState extends State<BrowserPage> with WidgetsBindingObserver {
   }
 
   Future<void> _openVideo(SmbFile file) async {
-    final videos = (await _itemsFuture).where(_isVideoFile).toList();
+    // Use _allItems (full list) so prev/next works across all videos, not just displayed page
+    final videos = _allItems.where(_isVideoFile).toList();
     if (!mounted) return;
     final index = videos.indexWhere((item) => item.path == file.path);
     await Navigator.of(context).push(
@@ -486,8 +527,19 @@ class _BrowserPageState extends State<BrowserPage> with WidgetsBindingObserver {
             if (items.isEmpty) {
               return const EmptyState();
             }
+            // Populate pagination state on first load or refresh
+            if (_displayItems.isEmpty && items.isNotEmpty) {
+              _allItems = items;
+              _displayItems = items.length > _pageSize
+                  ? items.sublist(0, _pageSize)
+                  : items;
+              _hasMore = items.length > _pageSize;
+            }
             return _SmbFileList(
-              items: items,
+              items: _displayItems,
+              hasMore: _hasMore,
+              isLoadingMore: _isLoadingMore,
+              onLoadMore: _loadMore,
               mode: _viewMode,
               client: _client,
               streamServer: _streamServer,
@@ -495,7 +547,7 @@ class _BrowserPageState extends State<BrowserPage> with WidgetsBindingObserver {
                 if (item.isDirectory()) {
                   _openFolder(item);
                 } else if (_isImageFile(item)) {
-                  _openImage(item, items);
+                  _openImage(item, _allItems);
                 } else {
                   _openVideo(item);
                 }
@@ -512,9 +564,12 @@ class _BrowserPageState extends State<BrowserPage> with WidgetsBindingObserver {
 // _SmbFileList
 // ---------------------------------------------------------------------------
 
-class _SmbFileList extends StatelessWidget {
+class _SmbFileList extends StatefulWidget {
   const _SmbFileList({
     required this.items,
+    required this.hasMore,
+    required this.isLoadingMore,
+    required this.onLoadMore,
     required this.mode,
     required this.client,
     required this.streamServer,
@@ -522,13 +577,42 @@ class _SmbFileList extends StatelessWidget {
   });
 
   final List<SmbFile> items;
+  final bool hasMore;
+  final bool isLoadingMore;
+  final VoidCallback onLoadMore;
   final FileListViewMode mode;
   final SmbConnect client;
   final LocalSmbStreamServer streamServer;
   final ValueChanged<SmbFile> onOpen;
 
   @override
+  State<_SmbFileList> createState() => _SmbFileListState();
+}
+
+class _SmbFileListState extends State<_SmbFileList> {
+  ScrollController? _scrollController;
+
+  @override
+  void dispose() {
+    _scrollController?.removeListener(_onScroll);
+    super.dispose();
+  }
+
+  void _onScroll() {
+    final controller = _scrollController;
+    if (controller == null) return;
+    // Load more when within 400px of the bottom
+    if (controller.position.pixels >= controller.position.maxScrollExtent - 400) {
+      widget.onLoadMore();
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final items = widget.items;
+    final mode = widget.mode;
+    final totalItems = items.length + (widget.hasMore || widget.isLoadingMore ? 1 : 0);
+
     if (mode == FileListViewMode.largeGrid ||
         mode == FileListViewMode.mediumGrid) {
       final crossAxisCount = mode == FileListViewMode.largeGrid ? 2 : 3;
@@ -540,28 +624,55 @@ class _SmbFileList extends StatelessWidget {
           mainAxisSpacing: 10,
           childAspectRatio: mode == FileListViewMode.largeGrid ? 0.82 : 0.72,
         ),
-        itemCount: items.length,
-        itemBuilder: (context, index) => MediaFileTile(
-          file: items[index],
-          client: client,
-          streamServer: streamServer,
-          grid: true,
-          onTap: () => onOpen(items[index]),
-        ),
+        itemCount: totalItems,
+        itemBuilder: (context, index) {
+          if (index >= items.length) {
+            // Loading indicator at the end
+            widget.onLoadMore();
+            return const Center(
+              child: Padding(
+                padding: EdgeInsets.all(16),
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+            );
+          }
+          return MediaFileTile(
+            file: items[index],
+            client: widget.client,
+            streamServer: widget.streamServer,
+            grid: true,
+            thumbnailDelay: Duration(milliseconds: index * 80),
+            onTap: () => widget.onOpen(items[index]),
+          );
+        },
       );
     }
 
     return ListView.separated(
+      controller: _scrollController ??= ScrollController()..addListener(_onScroll),
       padding: const EdgeInsets.fromLTRB(14, 10, 14, 18),
-      itemCount: items.length,
+      itemCount: totalItems,
       separatorBuilder: (_, _) => const SizedBox(height: 8),
-      itemBuilder: (context, index) => MediaFileTile(
-        file: items[index],
-        client: client,
-        streamServer: streamServer,
-        compact: mode == FileListViewMode.list,
-        onTap: () => onOpen(items[index]),
-      ),
+      itemBuilder: (context, index) {
+        if (index >= items.length) {
+          // Loading indicator at the end
+          widget.onLoadMore();
+          return const Center(
+            child: Padding(
+              padding: EdgeInsets.all(16),
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
+          );
+        }
+        return MediaFileTile(
+          file: items[index],
+          client: widget.client,
+          streamServer: widget.streamServer,
+          compact: mode == FileListViewMode.list,
+          thumbnailDelay: Duration(milliseconds: index * 80),
+          onTap: () => widget.onOpen(items[index]),
+        );
+      },
     );
   }
 }
@@ -578,6 +689,7 @@ class MediaFileTile extends StatelessWidget {
     required this.streamServer,
     this.compact = false,
     this.grid = false,
+    this.thumbnailDelay = Duration.zero,
     super.key,
   });
 
@@ -587,6 +699,7 @@ class MediaFileTile extends StatelessWidget {
   final LocalSmbStreamServer streamServer;
   final bool compact;
   final bool grid;
+  final Duration thumbnailDelay;
 
   @override
   Widget build(BuildContext context) {
@@ -622,6 +735,7 @@ class MediaFileTile extends StatelessWidget {
                   streamServer: streamServer,
                   fallbackIcon: icon,
                   color: color,
+                  delay: thumbnailDelay,
                 ),
               ),
               Padding(
@@ -663,6 +777,7 @@ class MediaFileTile extends StatelessWidget {
                   streamServer: streamServer,
                   fallbackIcon: icon,
                   color: color,
+                  delay: thumbnailDelay,
                 ),
               ),
               const SizedBox(width: 12),
@@ -709,8 +824,12 @@ class SmbThumbnail extends StatefulWidget {
     required this.streamServer,
     required this.fallbackIcon,
     required this.color,
+    this.delay = Duration.zero,
     super.key,
   });
+
+  /// Delay before starting thumbnail load (for staggering).
+  final Duration delay;
 
   final SmbFile file;
   final SmbConnect client;
@@ -743,14 +862,20 @@ class _SmbThumbnailState extends State<SmbThumbnail> {
     final file = widget.file;
     if (file.isDirectory()) return;
 
+    // Stagger thumbnail loading so the list renders first
+    if (widget.delay != Duration.zero) {
+      await Future<void>.delayed(widget.delay);
+    }
+    if (_disposed) return;
+
     final cacheKey = _isVideoFile(file) ? 'v:${file.name}' : file.name;
     final cached = thumbnailCache.get(cacheKey);
     if (cached != null) {
-      setState(() => _bytes = cached);
+      if (!_disposed) setState(() => _bytes = cached);
       return;
     }
 
-    setState(() => _loading = true);
+    if (!_disposed) setState(() => _loading = true);
 
     try {
       Uint8List? result;

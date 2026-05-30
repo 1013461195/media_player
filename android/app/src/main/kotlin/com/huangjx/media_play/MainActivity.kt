@@ -1,5 +1,6 @@
 package com.huangjx.media_play
 
+import android.content.Intent
 import android.os.Build
 import android.view.Display
 import io.flutter.embedding.android.FlutterActivity
@@ -8,6 +9,8 @@ import io.flutter.plugin.common.MethodChannel
 import com.huangjx.media_play.smb.SmbService
 import com.huangjx.media_play.smb.SmbContentProvider
 import com.huangjx.media_play.smb.NativeSmbHttpServer
+import com.huangjx.media_play.smb.SmbPlaybackRegistry
+import com.huangjx.media_play.smb.SmbPlayerActivity
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -20,12 +23,14 @@ class MainActivity : FlutterActivity() {
     private val smbService = SmbService()
     private val httpServer = NativeSmbHttpServer(smbService)
     private val scope = CoroutineScope(Dispatchers.IO)
+    private var pendingPlaybackResult: MethodChannel.Result? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
 
         // Initialize the ContentProvider with the SmbService instance
         SmbContentProvider.init(smbService)
+        SmbPlaybackRegistry.service = smbService
 
         // HDR channel
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, HDR_CHANNEL).setMethodCallHandler { call, result ->
@@ -143,10 +148,45 @@ class MainActivity : FlutterActivity() {
                         result.error("SMB_HTTP_URL_ERROR", e.message, null)
                     }
                 }
+                "smbPlayNative" -> {
+                    val sessionId = call.argument<String>("sessionId") ?: ""
+                    val paths = call.argument<List<String>>("paths") ?: emptyList()
+                    val names = call.argument<List<String>>("names") ?: emptyList()
+                    val initialIndex = call.argument<Int>("initialIndex") ?: 0
+                    if (sessionId.isBlank() || paths.isEmpty()) {
+                        result.error("SMB_PLAY_ERROR", "Missing SMB playback arguments", null)
+                        return@setMethodCallHandler
+                    }
+                    if (pendingPlaybackResult != null) {
+                        result.error("SMB_PLAY_ERROR", "Another SMB playback is already active", null)
+                        return@setMethodCallHandler
+                    }
+                    pendingPlaybackResult = result
+                    try {
+                        val intent = Intent(this, SmbPlayerActivity::class.java).apply {
+                            putExtra(SmbPlayerActivity.EXTRA_SESSION_ID, sessionId)
+                            putStringArrayListExtra(SmbPlayerActivity.EXTRA_PATHS, ArrayList(paths))
+                            putStringArrayListExtra(SmbPlayerActivity.EXTRA_NAMES, ArrayList(names))
+                            putExtra(SmbPlayerActivity.EXTRA_INITIAL_INDEX, initialIndex)
+                        }
+                        startActivityForResult(intent, SMB_PLAY_REQUEST)
+                    } catch (e: Exception) {
+                        pendingPlaybackResult = null
+                        result.error("SMB_PLAY_ERROR", e.message, null)
+                    }
+                }
                 else -> {
                     result.notImplemented()
                 }
             }
+        }
+    }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == SMB_PLAY_REQUEST) {
+            pendingPlaybackResult?.success(resultCode)
+            pendingPlaybackResult = null
         }
     }
 
@@ -168,5 +208,9 @@ class MainActivity : FlutterActivity() {
         } else {
             false
         }
+    }
+
+    companion object {
+        private const val SMB_PLAY_REQUEST = 7301
     }
 }

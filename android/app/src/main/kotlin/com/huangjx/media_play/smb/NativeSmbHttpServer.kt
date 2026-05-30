@@ -5,6 +5,7 @@ import java.net.InetAddress
 import java.net.ServerSocket
 import java.net.Socket
 import java.net.URLDecoder
+import java.util.LinkedHashMap
 import java.util.concurrent.Executors
 
 /**
@@ -15,6 +16,13 @@ class NativeSmbHttpServer(private val smbService: SmbService) {
 
     private var serverSocket: ServerSocket? = null
     private val executor = Executors.newCachedThreadPool()
+    private val handleCache = object : LinkedHashMap<String, CachedSmbFile>(8, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, CachedSmbFile>): Boolean {
+            if (size <= MAX_CACHED_HANDLES) return false
+            eldest.value.close()
+            return true
+        }
+    }
 
     /**
      * Starts the HTTP server on a random available port.
@@ -32,6 +40,10 @@ class NativeSmbHttpServer(private val smbService: SmbService) {
     fun stop() {
         try { serverSocket?.close() } catch (_: Exception) {}
         serverSocket = null
+        synchronized(handleCache) {
+            handleCache.values.forEach { it.close() }
+            handleCache.clear()
+        }
     }
 
     val port: Int get() = serverSocket?.localPort ?: 0
@@ -57,10 +69,12 @@ class NativeSmbHttpServer(private val smbService: SmbService) {
     }
 
     private fun handleConnection(socket: Socket) {
+        var output: OutputStream? = null
+        var responseStarted = false
         try {
             socket.soTimeout = 60_000
             val input = socket.getInputStream().buffered()
-            val output = socket.getOutputStream()
+            output = socket.getOutputStream()
             val t0 = System.currentTimeMillis()
 
             // Read request line
@@ -95,58 +109,58 @@ class NativeSmbHttpServer(private val smbService: SmbService) {
             val path = URLDecoder.decode(encodedPath, "UTF-8")
 
             // Open file once — get size from handle, no extra round trip
-            var handle: SmbFileHandle? = null
-            try {
-                handle = smbService.openFile(sessionId, path)
-                val totalSize = handle.size
-                val t1 = System.currentTimeMillis()
-                android.util.Log.d("SmbHttp", "open+size=${t1-t0}ms path=$path size=$totalSize range=${headers["range"]}")
-                val rangeHeader = headers["range"]
-                val (start, end) = parseRange(rangeHeader, totalSize)
-                val contentLength = end - start + 1
-                val hasRange = rangeHeader != null
-                val contentType = guessContentType(path)
+            val cacheKey = "$sessionId|$path"
+            val activeFile = cachedFile(cacheKey, sessionId, path)
+            val totalSize = activeFile.size
+            val t1 = System.currentTimeMillis()
+            android.util.Log.d("SmbHttp", "open+size=${t1-t0}ms path=$path size=$totalSize range=${headers["range"]}")
+            val rangeHeader = headers["range"]
+            val (start, end) = parseRange(rangeHeader, totalSize)
+            val contentLength = end - start + 1
+            val hasRange = rangeHeader != null
+            val contentType = activeFile.contentType
 
-                // Send response
-                val sb = StringBuilder()
-                sb.append(if (hasRange) "HTTP/1.1 206 Partial Content\r\n" else "HTTP/1.1 200 OK\r\n")
-                sb.append("Accept-Ranges: bytes\r\n")
-                sb.append("Content-Type: $contentType\r\n")
-                sb.append("Content-Length: $contentLength\r\n")
-                if (hasRange) {
-                    sb.append("Content-Range: bytes $start-$end/$totalSize\r\n")
-                }
-                sb.append("Connection: close\r\n")
-                sb.append("\r\n")
-                output.write(sb.toString().toByteArray())
-                output.flush()
-
-                if (method == "HEAD") {
-                    return
-                }
-
-                // Stream file data using random-access read (O(1) seek)
-                val buffer = ByteArray(256 * 1024)
-                var fileOffset = start
-                var remaining = contentLength
-                var totalWritten = 0L
-                while (remaining > 0) {
-                    val toRead = minOf(buffer.size.toLong(), remaining).toInt()
-                    val read = handle.readAt(fileOffset, buffer, 0, toRead)
-                    if (read == -1) break
-                    output.write(buffer, 0, read)
-                    fileOffset += read
-                    remaining -= read
-                    totalWritten += read
-                }
-                output.flush()
-                val t2 = System.currentTimeMillis()
-                android.util.Log.d("SmbHttp", "done wrote=$totalWritten total=${t2-t0}ms")
-            } finally {
-                try { handle?.close() } catch (_: Exception) {}
+            // Send response
+            val sb = StringBuilder()
+            sb.append(if (hasRange) "HTTP/1.1 206 Partial Content\r\n" else "HTTP/1.1 200 OK\r\n")
+            sb.append("Accept-Ranges: bytes\r\n")
+            sb.append("Content-Type: $contentType\r\n")
+            sb.append("Content-Length: $contentLength\r\n")
+            if (hasRange) {
+                sb.append("Content-Range: bytes $start-$end/$totalSize\r\n")
             }
-        } catch (_: Exception) {
-            // Client disconnected or other error
+            sb.append("Connection: close\r\n")
+            sb.append("\r\n")
+            output.write(sb.toString().toByteArray())
+            output.flush()
+            responseStarted = true
+
+            if (method == "HEAD") {
+                return
+            }
+
+            // Stream file data using random-access read (O(1) seek)
+            val buffer = ByteArray(STREAM_BUFFER_SIZE)
+            var fileOffset = start
+            var remaining = contentLength
+            var totalWritten = 0L
+            while (remaining > 0) {
+                val toRead = minOf(buffer.size.toLong(), remaining).toInt()
+                val read = activeFile.readAt(fileOffset, buffer, 0, toRead)
+                if (read == -1) break
+                output.write(buffer, 0, read)
+                fileOffset += read
+                remaining -= read
+                totalWritten += read
+            }
+            output.flush()
+            val t2 = System.currentTimeMillis()
+            android.util.Log.d("SmbHttp", "done wrote=$totalWritten total=${t2-t0}ms")
+        } catch (e: Exception) {
+            android.util.Log.e("SmbHttp", "stream failed: ${e.message}", e)
+            if (!responseStarted) {
+                try { output?.let { sendError(it, 500, "SMB stream failed") } } catch (_: Exception) {}
+            }
         } finally {
             try { socket.close() } catch (_: Exception) {}
         }
@@ -228,5 +242,41 @@ class NativeSmbHttpServer(private val smbService: SmbService) {
             "ogg" -> "audio/ogg"
             else -> "application/octet-stream"
         }
+    }
+
+    private fun cachedFile(cacheKey: String, sessionId: String, path: String): CachedSmbFile {
+        synchronized(handleCache) {
+            handleCache[cacheKey]?.let { return it }
+        }
+
+        val handle = smbService.openFile(sessionId, path)
+        val cached = CachedSmbFile(handle, handle.size, guessContentType(path))
+        synchronized(handleCache) {
+            handleCache[cacheKey]?.let {
+                cached.close()
+                return it
+            }
+            handleCache[cacheKey] = cached
+            return cached
+        }
+    }
+
+    private class CachedSmbFile(
+        private val handle: SmbFileHandle,
+        val size: Long,
+        val contentType: String
+    ) {
+        fun readAt(fileOffset: Long, buffer: ByteArray, offset: Int, length: Int): Int {
+            return handle.readAt(fileOffset, buffer, offset, length)
+        }
+
+        fun close() {
+            handle.close()
+        }
+    }
+
+    companion object {
+        private const val STREAM_BUFFER_SIZE = 1024 * 1024
+        private const val MAX_CACHED_HANDLES = 4
     }
 }

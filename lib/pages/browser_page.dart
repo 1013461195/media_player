@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
@@ -53,6 +54,7 @@ class _BrowserPageState extends State<BrowserPage> with WidgetsBindingObserver {
   FileListViewMode _viewMode = FileListViewMode.detail;
   int _loadGeneration = 0;
   Future<void>? _reconnectFuture;
+  Future<void>? _nativeConnectFuture;
 
   // Pagination state
   List<SmbFile> _allItems = [];
@@ -69,7 +71,7 @@ class _BrowserPageState extends State<BrowserPage> with WidgetsBindingObserver {
     _client = widget.client;
     _streamServer = LocalSmbStreamServer(_client);
     _itemsFuture = _startItemsLoad();
-    _connectNative();
+    _nativeConnectFuture = _connectNative();
   }
 
   Future<void> _connectNative() async {
@@ -107,6 +109,9 @@ class _BrowserPageState extends State<BrowserPage> with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (smbVideoPlaybackActive) {
+      return;
+    }
     final route = ModalRoute.of(context);
     if (state == AppLifecycleState.resumed &&
         mounted &&
@@ -279,7 +284,8 @@ class _BrowserPageState extends State<BrowserPage> with WidgetsBindingObserver {
     _client = client;
     _streamServer = LocalSmbStreamServer(_client);
     await _nativeClient.disconnect();
-    await _connectNative();
+    _nativeConnectFuture = _connectNative();
+    await _nativeConnectFuture;
   }
 
   bool _shouldReconnectAfter(Object error) {
@@ -304,7 +310,7 @@ class _BrowserPageState extends State<BrowserPage> with WidgetsBindingObserver {
       _displayItems = [];
       _hasMore = false;
       _isLoadingMore = false;
-      _itemsFuture = _startItemsLoad();
+      _itemsFuture = _startItemsLoad(reconnect: true);
     });
     return false;
   }
@@ -395,18 +401,46 @@ class _BrowserPageState extends State<BrowserPage> with WidgetsBindingObserver {
     final videos = _allItems.where(_isVideoFile).toList();
     if (!mounted) return;
     final index = videos.indexWhere((item) => item.path == file.path);
-    await Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        builder: (_) => VideoPlayerPage(
-          client: _client,
-          streamServer: _streamServer,
-          nativeClient: _nativeClient.isConnected ? _nativeClient : null,
-          videos: videos,
-          initialIndex: index < 0 ? 0 : index,
-        ),
-      ),
-    );
-    _refresh();
+    smbVideoPlaybackActive = true;
+    var reconnectAfterPlayback = false;
+    try {
+      if (!_nativeClient.isConnected) {
+        try {
+          await _nativeConnectFuture?.timeout(const Duration(seconds: 8));
+        } catch (e) {
+          debugPrint('Native SMB not ready before playback, falling back: $e');
+        }
+      }
+      if (!mounted) return;
+      if (Platform.isAndroid && _nativeClient.isConnected) {
+        try {
+          await _nativeClient.playNative(
+            paths: videos.map((item) => item.path).toList(),
+            names: videos.map((item) => item.name).toList(),
+            initialIndex: index < 0 ? 0 : index,
+          );
+          reconnectAfterPlayback = true;
+        } catch (e) {
+          debugPrint('Native SMB player failed, falling back: $e');
+        }
+      }
+      if (!reconnectAfterPlayback) {
+        await Navigator.of(context).push(
+          MaterialPageRoute<void>(
+            builder: (_) => VideoPlayerPage(
+              client: _client,
+              streamServer: _streamServer,
+              nativeClient: _nativeClient.isConnected ? _nativeClient : null,
+              videos: videos,
+              initialIndex: index < 0 ? 0 : index,
+            ),
+          ),
+        );
+      }
+    } finally {
+      smbVideoPlaybackActive = false;
+    }
+    _refresh(reconnect: reconnectAfterPlayback);
   }
 
   String _title() {
@@ -884,10 +918,22 @@ class _SmbThumbnailState extends State<SmbThumbnail> {
         if (_disposed) return;
         result = await downscaleImage(raw, 256);
       } else if (_isVideoFile(file)) {
+        if (Platform.isAndroid) {
+          if (!_disposed) setState(() => _loading = false);
+          return;
+        }
+        if (smbVideoPlaybackActive) {
+          if (!_disposed) setState(() => _loading = false);
+          return;
+        }
         final uri = await widget.streamServer.urlFor(file);
         if (_disposed) return;
         await videoThumbnailSemaphore.acquire();
         try {
+          if (smbVideoPlaybackActive || _disposed) {
+            if (!_disposed) setState(() => _loading = false);
+            return;
+          }
           result = await VideoThumbnail.thumbnailData(
             video: uri.toString(),
             imageFormat: ImageFormat.JPEG,
@@ -978,6 +1024,7 @@ class ThumbnailCache {
 }
 
 final thumbnailCache = ThumbnailCache();
+bool smbVideoPlaybackActive = false;
 
 class Semaphore {
   Semaphore(this._maxConcurrent);

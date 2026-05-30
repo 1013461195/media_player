@@ -113,6 +113,20 @@ class SmbNativeClient {
     return url;
   }
 
+  Future<void> playNative({
+    required List<String> paths,
+    required List<String> names,
+    required int initialIndex,
+  }) async {
+    _assertConnected();
+    await _channel.invokeMethod<int>('smbPlayNative', {
+      'sessionId': _sessionId,
+      'paths': paths,
+      'names': names,
+      'initialIndex': initialIndex,
+    });
+  }
+
   Future<void> disconnect() async {
     if (_sessionId == null) return;
     try {

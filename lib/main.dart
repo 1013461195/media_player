@@ -1,12 +1,40 @@
+import 'dart:async';
+import 'dart:ui';
+
 import 'package:flutter/material.dart';
 import 'package:media_kit/media_kit.dart';
 
 import 'pages/server_home_page.dart';
 
 void main() {
-  WidgetsFlutterBinding.ensureInitialized();
-  MediaKit.ensureInitialized();
-  runApp(const NasPlayerApp());
+  runZonedGuarded(
+    () {
+      WidgetsFlutterBinding.ensureInitialized();
+      PlatformDispatcher.instance.onError = (error, stack) {
+        if (_isClosedSmbSinkError(error)) {
+          debugPrint('Ignored closed SMB socket error: $error');
+          return true;
+        }
+        return false;
+      };
+      MediaKit.ensureInitialized();
+      runApp(const NasPlayerApp());
+    },
+    (error, stack) {
+      if (_isClosedSmbSinkError(error)) {
+        debugPrint('Ignored closed SMB socket error: $error');
+        return;
+      }
+      FlutterError.reportError(
+        FlutterErrorDetails(exception: error, stack: stack),
+      );
+    },
+  );
+}
+
+bool _isClosedSmbSinkError(Object error) {
+  final message = error.toString().toLowerCase();
+  return message.contains('streamsink is closed');
 }
 
 class NasPlayerApp extends StatelessWidget {

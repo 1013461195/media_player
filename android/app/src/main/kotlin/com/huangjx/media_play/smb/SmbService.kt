@@ -61,10 +61,12 @@ class SmbFileHandle(private val file: com.hierynomus.smbj.share.File) : AutoClos
      * Reads up to [length] bytes starting at [fileOffset] into [buffer].
      * Returns the number of bytes read, or -1 at end of file.
      */
+    @Synchronized
     fun readAt(fileOffset: Long, buffer: ByteArray, offset: Int, length: Int): Int {
         return file.read(buffer, fileOffset, offset, length)
     }
 
+    @Synchronized
     override fun close() {
         try { file.close() } catch (_: Exception) {}
     }
@@ -228,7 +230,7 @@ class SmbService {
      * "myshare" -> ("myshare", "")
      */
     private fun parsePath(fullPath: String): Pair<String, String> {
-        val normalized = fullPath.replace("/", "\\")
+        val normalized = fullPath.replace("/", "\\").trimStart('\\')
         val idx = normalized.indexOf('\\')
         return if (idx < 0) {
             Pair(normalized, "")

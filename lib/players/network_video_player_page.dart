@@ -26,8 +26,7 @@ class NetworkVideoPlayerPage extends StatefulWidget {
   final EmbyItem item;
 
   @override
-  State<NetworkVideoPlayerPage> createState() =>
-      _NetworkVideoPlayerPageState();
+  State<NetworkVideoPlayerPage> createState() => _NetworkVideoPlayerPageState();
 }
 
 class _NetworkVideoPlayerPageState extends State<NetworkVideoPlayerPage> {
@@ -45,7 +44,8 @@ class _NetworkVideoPlayerPageState extends State<NetworkVideoPlayerPage> {
   EmbyVideoQuality _quality = EmbyVideoQuality.original;
   bool _dolbyVisionChecked = false;
   Timer? _progressTimer;
-  final String _playSessionId = DateTime.now().microsecondsSinceEpoch.toString();
+  final String _playSessionId = DateTime.now().microsecondsSinceEpoch
+      .toString();
 
   @override
   void initState() {
@@ -60,8 +60,7 @@ class _NetworkVideoPlayerPageState extends State<NetworkVideoPlayerPage> {
   void dispose() {
     _progressTimer?.cancel();
     _reportPlaybackStopped();
-    unawaited(
-        SystemChrome.setPreferredOrientations(DeviceOrientation.values));
+    unawaited(SystemChrome.setPreferredOrientations(DeviceOrientation.values));
     unawaited(ScreenBrightness.instance.resetApplicationScreenBrightness());
     unawaited(_player.dispose());
     super.dispose();
@@ -186,8 +185,7 @@ class _NetworkVideoPlayerPageState extends State<NetworkVideoPlayerPage> {
     _gestureStartPosition = _player.state.position;
     _gestureMode = VideoGestureMode.none;
     try {
-      _gestureStartBrightness =
-          await ScreenBrightness.instance.application;
+      _gestureStartBrightness = await ScreenBrightness.instance.application;
     } catch (_) {
       _gestureStartBrightness = 0.5;
     }
@@ -224,13 +222,17 @@ class _NetworkVideoPlayerPageState extends State<NetworkVideoPlayerPage> {
           '${seconds >= 0 ? '+' : ''}$seconds s  ${formatDuration(target)}',
         );
       case VideoGestureMode.brightness:
-        final next =
-            (_gestureStartBrightness - delta.dy / size.height).clamp(0.0, 1.0);
+        final next = (_gestureStartBrightness - delta.dy / size.height).clamp(
+          0.0,
+          1.0,
+        );
         await ScreenBrightness.instance.setApplicationScreenBrightness(next);
         _setGestureText('亮度 ${(next * 100).round()}%');
       case VideoGestureMode.volume:
-        final next =
-            (_gestureStartVolume - delta.dy / size.height).clamp(0.0, 1.0);
+        final next = (_gestureStartVolume - delta.dy / size.height).clamp(
+          0.0,
+          1.0,
+        );
         await VolumeController.instance.setVolume(next);
         _setGestureText('音量 ${(next * 100).round()}%');
       case VideoGestureMode.none:
@@ -279,13 +281,10 @@ class _NetworkVideoPlayerPageState extends State<NetworkVideoPlayerPage> {
               final q = EmbyVideoQuality.all[index];
               return ListTile(
                 title: Text(q.label),
-                leading: Radio<EmbyVideoQuality>(
-                  value: q,
-                  groupValue: _quality,
-                  onChanged: (value) {
-                    Navigator.of(context).pop();
-                    if (value != null) _changeQuality(value);
-                  },
+                leading: Icon(
+                  q == _quality
+                      ? Icons.radio_button_checked
+                      : Icons.radio_button_unchecked,
                 ),
                 onTap: () {
                   Navigator.of(context).pop();
@@ -312,8 +311,7 @@ class _NetworkVideoPlayerPageState extends State<NetworkVideoPlayerPage> {
           if (snapshot.hasError) {
             return ErrorState(
               message: '视频加载失败：${friendlyError(snapshot.error)}',
-              onRetry: () =>
-                  setState(() => _prepareFuture = _prepareVideo()),
+              onRetry: () => setState(() => _prepareFuture = _prepareVideo()),
               dark: true,
             );
           }
@@ -346,8 +344,7 @@ class _NetworkVideoPlayerPageState extends State<NetworkVideoPlayerPage> {
                     ),
                     child: Text(
                       _gestureText!,
-                      style:
-                          const TextStyle(color: Colors.white, fontSize: 18),
+                      style: const TextStyle(color: Colors.white, fontSize: 18),
                     ),
                   ),
                 ),
@@ -433,8 +430,8 @@ class EmbyVideoControlBar extends StatelessWidget {
                     final value = max <= 0
                         ? 0.0
                         : position.inMilliseconds
-                            .clamp(0, duration.inMilliseconds)
-                            .toDouble();
+                              .clamp(0, duration.inMilliseconds)
+                              .toDouble();
                     return Row(
                       children: [
                         Text(
@@ -448,9 +445,8 @@ class EmbyVideoControlBar extends StatelessWidget {
                             onChanged: max <= 0
                                 ? null
                                 : (next) => player.seek(
-                                      Duration(
-                                          milliseconds: next.round()),
-                                    ),
+                                    Duration(milliseconds: next.round()),
+                                  ),
                           ),
                         ),
                         Text(
@@ -497,10 +493,8 @@ class EmbyVideoControlBar extends StatelessWidget {
                     return IconButton.filled(
                       tooltip: playing ? '暂停' : '播放',
                       iconSize: 32,
-                      icon: Icon(
-                          playing ? Icons.pause : Icons.play_arrow),
-                      onPressed: () =>
-                          playing ? player.pause() : player.play(),
+                      icon: Icon(playing ? Icons.pause : Icons.play_arrow),
+                      onPressed: () => playing ? player.pause() : player.play(),
                     );
                   },
                 ),

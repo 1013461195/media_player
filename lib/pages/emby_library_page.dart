@@ -36,6 +36,32 @@ class _EmbyLibraryPageState extends State<EmbyLibraryPage> {
     });
   }
 
+  void _openItem(EmbyItem item) {
+    if (item.playable) {
+      Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => NetworkVideoPlayerPage(
+            title: item.name,
+            client: widget.client,
+            item: item,
+          ),
+        ),
+      );
+    } else if (item.isSeries) {
+      Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => EmbySeriesPage(client: widget.client, series: item),
+        ),
+      );
+    } else {
+      Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => EmbyLibraryPage(client: widget.client, library: item),
+        ),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -43,23 +69,21 @@ class _EmbyLibraryPageState extends State<EmbyLibraryPage> {
       body: Column(
         children: [
           Padding(
-            padding: const EdgeInsets.fromLTRB(14, 8, 14, 6),
+            padding: const EdgeInsets.fromLTRB(12, 6, 12, 4),
             child: SegmentedButton<EmbyLibraryView>(
               segments: const [
                 ButtonSegment(
                   value: EmbyLibraryView.programs,
                   label: Text('节目'),
                 ),
-                ButtonSegment(
-                    value: EmbyLibraryView.genres, label: Text('类型')),
+                ButtonSegment(value: EmbyLibraryView.genres, label: Text('类型')),
                 ButtonSegment(
                   value: EmbyLibraryView.folders,
                   label: Text('文件夹'),
                 ),
               ],
               selected: {_view},
-              onSelectionChanged: (selected) =>
-                  _changeView(selected.first),
+              onSelectionChanged: (selected) => _changeView(selected.first),
             ),
           ),
           Expanded(
@@ -71,22 +95,18 @@ class _EmbyLibraryPageState extends State<EmbyLibraryPage> {
                 }
                 if (snapshot.hasError) {
                   return ErrorState(
-                    message:
-                        '读取媒体库失败：${friendlyError(snapshot.error)}',
-                    onRetry: () =>
-                        setState(() => _future = _load()),
+                    message: '读取媒体库失败：${friendlyError(snapshot.error)}',
+                    onRetry: () => setState(() => _future = _load()),
                   );
                 }
                 final items = snapshot.data ?? const <EmbyItem>[];
                 return GridView.builder(
-                  padding:
-                      const EdgeInsets.fromLTRB(14, 10, 14, 20),
-                  gridDelegate:
-                      const SliverGridDelegateWithFixedCrossAxisCount(
+                  padding: const EdgeInsets.fromLTRB(12, 8, 12, 16),
+                  gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
                     crossAxisCount: 3,
-                    crossAxisSpacing: 10,
-                    mainAxisSpacing: 10,
-                    childAspectRatio: 0.65,
+                    crossAxisSpacing: 8,
+                    mainAxisSpacing: 8,
+                    childAspectRatio: 0.62,
                   ),
                   itemCount: items.length,
                   itemBuilder: (context, index) {
@@ -94,29 +114,7 @@ class _EmbyLibraryPageState extends State<EmbyLibraryPage> {
                     return EmbyPosterCard(
                       item: item,
                       imageUri: widget.client.imageUri(item),
-                      onTap: () {
-                        if (item.playable) {
-                          Navigator.of(context).push(
-                            MaterialPageRoute<void>(
-                              builder: (_) =>
-                                  NetworkVideoPlayerPage(
-                                title: item.name,
-                                client: widget.client,
-                                item: item,
-                              ),
-                            ),
-                          );
-                        } else if (item.isSeries) {
-                          Navigator.of(context).push(
-                            MaterialPageRoute<void>(
-                              builder: (_) => EmbySeriesPage(
-                                client: widget.client,
-                                series: item,
-                              ),
-                            ),
-                          );
-                        }
-                      },
+                      onTap: () => _openItem(item),
                     );
                   },
                 );

@@ -54,8 +54,9 @@ class HdrDetector {
   static Future<bool> isDolbyVisionSupported() async {
     try {
       if (!Platform.isAndroid) return true;
-      final result =
-          await _channel.invokeMethod<bool>('checkDolbyVisionSupport');
+      final result = await _channel.invokeMethod<bool>(
+        'checkDolbyVisionSupport',
+      );
       return result ?? false;
     } catch (e) {
       return false;
@@ -97,10 +98,7 @@ class EmbyClient {
     final response = await _requestJson(
       'POST',
       '/Users/AuthenticateByName',
-      body: {
-        'Username': username,
-        'Pw': config.password,
-      },
+      body: {'Username': username, 'Pw': config.password},
       includeToken: false,
     );
     final user = response['User'] as Map<String, dynamic>? ?? {};
@@ -165,10 +163,7 @@ class EmbyClient {
       'SortBy': 'SortName',
     };
     if (view == EmbyLibraryView.programs) {
-      query.addAll({
-        'Recursive': 'true',
-        'IncludeItemTypes': 'Movie,Series',
-      });
+      query.addAll({'Recursive': 'true', 'IncludeItemTypes': 'Movie,Series'});
     } else {
       query.addAll({'Recursive': 'false'});
     }
@@ -176,6 +171,26 @@ class EmbyClient {
       'GET',
       '/Users/${config.userId}/Items',
       query: query,
+    );
+    final list = data['Items'] as List<dynamic>? ?? [];
+    return list.map(_itemFromJson).toList();
+  }
+
+  Future<List<EmbyItem>> children(
+    EmbyItem parent, {
+    bool recursive = false,
+  }) async {
+    _assertAuthenticated();
+    final data = await _requestJson(
+      'GET',
+      '/Users/${config.userId}/Items',
+      query: {
+        'ParentId': parent.id,
+        'Recursive': recursive ? 'true' : 'false',
+        'Fields':
+            'PrimaryImageAspectRatio,MediaSources,Overview,DateCreated,Genres',
+        'SortBy': 'SortName',
+      },
     );
     final list = data['Items'] as List<dynamic>? ?? [];
     return list.map(_itemFromJson).toList();
@@ -227,7 +242,10 @@ class EmbyClient {
     return _buildUri('/Videos/${item.id}/master.m3u8', query: query);
   }
 
-  Future<void> reportPlaybackStart(EmbyItem item, {String? playSessionId}) async {
+  Future<void> reportPlaybackStart(
+    EmbyItem item, {
+    String? playSessionId,
+  }) async {
     _assertAuthenticated();
     await _requestJson(
       'POST',
@@ -290,13 +308,13 @@ class EmbyClient {
     debugPrint('│ Headers:');
     debugPrint('│   Content-Type: application/json');
     debugPrint('│   Accept: application/json');
-    debugPrint(
-        '│   X-Emby-Client: Media Player');
+    debugPrint('│   X-Emby-Client: Media Player');
     debugPrint('│   X-Emby-Client-Version: 0.1.0');
     debugPrint('│   X-Emby-Device-Id: media-player-flutter');
     debugPrint('│   X-Emby-Device-Name: Media Player');
     debugPrint(
-        '│   X-Emby-Authorization: MediaBrowser Client="Media Player", Device="Flutter", DeviceId="media-player-flutter", DeviceName="Media Player", Version="0.1.0"');
+      '│   X-Emby-Authorization: MediaBrowser Client="Media Player", Device="Flutter", DeviceId="media-player-flutter", DeviceName="Media Player", Version="0.1.0"',
+    );
     if (includeToken && config.accessToken.isNotEmpty) {
       debugPrint('│   X-Emby-Token: ${config.accessToken}');
     }

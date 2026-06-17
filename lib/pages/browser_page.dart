@@ -9,6 +9,7 @@ import 'package:get_thumbnail_video/index.dart';
 import 'package:get_thumbnail_video/video_thumbnail.dart';
 
 import '../models.dart';
+import '../app_navigation.dart';
 import '../smb_native_client.dart';
 import '../smb_stream_server.dart';
 import '../utils.dart';
@@ -140,9 +141,7 @@ class _BrowserPageState extends State<BrowserPage> with WidgetsBindingObserver {
       return items;
     } catch (error, stackTrace) {
       Object displayedError = error;
-      debugPrint(
-        'Directory load failed: ${friendlyError(error)}\n$stackTrace',
-      );
+      debugPrint('Directory load failed: ${friendlyError(error)}\n$stackTrace');
       if (!reconnect && _shouldReconnectAfter(error)) {
         try {
           await _reconnectClient();
@@ -241,7 +240,10 @@ class _BrowserPageState extends State<BrowserPage> with WidgetsBindingObserver {
   void _loadMore() {
     if (_isLoadingMore || !_hasMore) return;
     _isLoadingMore = true;
-    final nextEnd = (_displayItems.length + _pageSize).clamp(0, _allItems.length);
+    final nextEnd = (_displayItems.length + _pageSize).clamp(
+      0,
+      _allItems.length,
+    );
     setState(() {
       _displayItems = _allItems.sublist(0, nextEnd);
       _hasMore = nextEnd < _allItems.length;
@@ -347,9 +349,7 @@ class _BrowserPageState extends State<BrowserPage> with WidgetsBindingObserver {
           return;
         }
         Navigator.of(context).pushReplacement(
-          MaterialPageRoute<void>(
-            builder: (_) => EmbyHomePage(client: client),
-          ),
+          MaterialPageRoute<void>(builder: (_) => EmbyHomePage(client: client)),
         );
         return;
       }
@@ -424,6 +424,7 @@ class _BrowserPageState extends State<BrowserPage> with WidgetsBindingObserver {
           debugPrint('Native SMB player failed, falling back: $e');
         }
       }
+      if (!mounted) return;
       if (!reconnectAfterPlayback) {
         await Navigator.of(context).push(
           MaterialPageRoute<void>(
@@ -460,92 +461,82 @@ class _BrowserPageState extends State<BrowserPage> with WidgetsBindingObserver {
           await _goBack();
         }
       },
-      child: Scaffold(
-        appBar: AppBar(
-          leading: IconButton(
-            tooltip: _stack.isEmpty ? '切换服务器' : '返回上级',
-            icon: _isSwitchingServer
-                ? const SizedBox.square(
-                    dimension: 20,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : Icon(
-                    _stack.isEmpty ? Icons.storage_outlined : Icons.arrow_back,
-                  ),
-            onPressed: _isSwitchingServer
-                ? null
-                : _stack.isEmpty
-                ? _switchServer
-                : _goBack,
-          ),
-          title: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                widget.server.displayName,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: Theme.of(context).textTheme.titleMedium,
+      child: AppPageShell(
+        title: '文件源',
+        subtitle: _stack.isEmpty ? widget.server.displayName : _title(),
+        leading: _stack.isEmpty
+            ? null
+            : AppCircleButton(
+                icon: Icons.arrow_back,
+                tooltip: '返回上级',
+                onPressed: _goBack,
               ),
-              Text(
-                _title(),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: Theme.of(context).textTheme.bodySmall,
+        actions: [
+          TextButton(
+            onPressed: () => _refresh(reconnect: true),
+            child: const Text('使用教程'),
+          ),
+          PopupMenuButton<FileListViewMode>(
+            tooltip: '显示方式',
+            icon: const Icon(Icons.more_horiz, color: appTextPrimary),
+            initialValue: _viewMode,
+            onSelected: (mode) => setState(() => _viewMode = mode),
+            itemBuilder: (context) => const [
+              PopupMenuItem(
+                value: FileListViewMode.list,
+                child: ListTile(
+                  leading: Icon(Icons.view_list_outlined),
+                  title: Text('列表'),
+                ),
+              ),
+              PopupMenuItem(
+                value: FileListViewMode.detail,
+                child: ListTile(
+                  leading: Icon(Icons.format_list_bulleted),
+                  title: Text('详细列表'),
+                ),
+              ),
+              PopupMenuItem(
+                value: FileListViewMode.largeGrid,
+                child: ListTile(
+                  leading: Icon(Icons.grid_view_outlined),
+                  title: Text('大图标'),
+                ),
+              ),
+              PopupMenuItem(
+                value: FileListViewMode.mediumGrid,
+                child: ListTile(
+                  leading: Icon(Icons.apps_outlined),
+                  title: Text('中图标'),
+                ),
               ),
             ],
           ),
-          actions: [
-            PopupMenuButton<FileListViewMode>(
-              tooltip: '显示方式',
-              icon: const Icon(Icons.view_module_outlined),
-              initialValue: _viewMode,
-              onSelected: (mode) => setState(() => _viewMode = mode),
-              itemBuilder: (context) => const [
-                PopupMenuItem(
-                  value: FileListViewMode.list,
-                  child: ListTile(
-                    leading: Icon(Icons.view_list_outlined),
-                    title: Text('列表'),
-                  ),
-                ),
-                PopupMenuItem(
-                  value: FileListViewMode.detail,
-                  child: ListTile(
-                    leading: Icon(Icons.format_list_bulleted),
-                    title: Text('详细列表'),
-                  ),
-                ),
-                PopupMenuItem(
-                  value: FileListViewMode.largeGrid,
-                  child: ListTile(
-                    leading: Icon(Icons.grid_view_outlined),
-                    title: Text('大图标'),
-                  ),
-                ),
-                PopupMenuItem(
-                  value: FileListViewMode.mediumGrid,
-                  child: ListTile(
-                    leading: Icon(Icons.apps_outlined),
-                    title: Text('中图标'),
-                  ),
-                ),
-              ],
-            ),
-            if (_stack.isNotEmpty)
-              IconButton(
-                tooltip: '切换服务器',
-                icon: const Icon(Icons.storage_outlined),
-                onPressed: _isSwitchingServer ? null : _switchServer,
+          if (_isSwitchingServer)
+            const Padding(
+              padding: EdgeInsets.only(left: 12),
+              child: SizedBox.square(
+                dimension: 20,
+                child: CircularProgressIndicator(strokeWidth: 2),
               ),
-            IconButton(
-              tooltip: '刷新',
-              icon: const Icon(Icons.refresh),
-              onPressed: () => _refresh(reconnect: true),
+            )
+          else
+            AppCircleButton(
+              icon: Icons.dns_outlined,
+              tooltip: '切换服务器',
+              onPressed: _switchServer,
             ),
-          ],
+        ],
+        bottomNavigationBar: AppTabBar(
+          active: AppTab.files,
+          onChanged: (tab) => openAppTab(
+            context,
+            tab,
+            active: AppTab.files,
+            currentServer: widget.server,
+          ),
         ),
-        body: FutureBuilder<List<SmbFile>>(
+        child: FutureBuilder<List<SmbFile>>(
           future: _itemsFuture,
           builder: (context, snapshot) {
             if (snapshot.connectionState != ConnectionState.done) {
@@ -625,6 +616,7 @@ class _SmbFileList extends StatefulWidget {
 
 class _SmbFileListState extends State<_SmbFileList> {
   ScrollController? _scrollController;
+  bool _loadMoreScheduled = false;
 
   @override
   void dispose() {
@@ -636,33 +628,47 @@ class _SmbFileListState extends State<_SmbFileList> {
     final controller = _scrollController;
     if (controller == null) return;
     // Load more when within 400px of the bottom
-    if (controller.position.pixels >= controller.position.maxScrollExtent - 400) {
-      widget.onLoadMore();
+    if (controller.position.pixels >=
+        controller.position.maxScrollExtent - 400) {
+      _scheduleLoadMore();
     }
+  }
+
+  void _scheduleLoadMore() {
+    if (_loadMoreScheduled) return;
+    _loadMoreScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _loadMoreScheduled = false;
+      if (!mounted) return;
+      widget.onLoadMore();
+    });
   }
 
   @override
   Widget build(BuildContext context) {
     final items = widget.items;
     final mode = widget.mode;
-    final totalItems = items.length + (widget.hasMore || widget.isLoadingMore ? 1 : 0);
+    final totalItems =
+        items.length + (widget.hasMore || widget.isLoadingMore ? 1 : 0);
 
     if (mode == FileListViewMode.largeGrid ||
         mode == FileListViewMode.mediumGrid) {
       final crossAxisCount = mode == FileListViewMode.largeGrid ? 2 : 3;
       return GridView.builder(
-        padding: const EdgeInsets.fromLTRB(14, 10, 14, 18),
+        controller: _scrollController ??= ScrollController()
+          ..addListener(_onScroll),
+        padding: const EdgeInsets.fromLTRB(20, 6, 20, 96),
         gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
           crossAxisCount: crossAxisCount,
           crossAxisSpacing: 10,
           mainAxisSpacing: 10,
-          childAspectRatio: mode == FileListViewMode.largeGrid ? 0.82 : 0.72,
+          childAspectRatio: mode == FileListViewMode.largeGrid ? 0.9 : 0.78,
         ),
         itemCount: totalItems,
         itemBuilder: (context, index) {
           if (index >= items.length) {
             // Loading indicator at the end
-            widget.onLoadMore();
+            _scheduleLoadMore();
             return const Center(
               child: Padding(
                 padding: EdgeInsets.all(16),
@@ -682,31 +688,39 @@ class _SmbFileListState extends State<_SmbFileList> {
       );
     }
 
-    return ListView.separated(
-      controller: _scrollController ??= ScrollController()..addListener(_onScroll),
-      padding: const EdgeInsets.fromLTRB(14, 10, 14, 18),
-      itemCount: totalItems,
-      separatorBuilder: (_, _) => const SizedBox(height: 8),
-      itemBuilder: (context, index) {
-        if (index >= items.length) {
-          // Loading indicator at the end
-          widget.onLoadMore();
-          return const Center(
-            child: Padding(
-              padding: EdgeInsets.all(16),
-              child: CircularProgressIndicator(strokeWidth: 2),
-            ),
-          );
-        }
-        return MediaFileTile(
-          file: items[index],
-          client: widget.client,
-          streamServer: widget.streamServer,
-          compact: mode == FileListViewMode.list,
-          thumbnailDelay: Duration(milliseconds: index * 80),
-          onTap: () => widget.onOpen(items[index]),
-        );
-      },
+    return ListView(
+      controller: _scrollController ??= ScrollController()
+        ..addListener(_onScroll),
+      padding: const EdgeInsets.only(top: 6, bottom: 96),
+      children: [
+        AppGroupedList(
+          children: [
+            for (var index = 0; index < items.length; index++) ...[
+              MediaFileTile(
+                file: items[index],
+                client: widget.client,
+                streamServer: widget.streamServer,
+                compact: mode == FileListViewMode.list,
+                thumbnailDelay: Duration(milliseconds: index * 80),
+                onTap: () => widget.onOpen(items[index]),
+              ),
+              if (index != items.length - 1) const AppListDivider(),
+            ],
+          ],
+        ),
+        if (totalItems > items.length)
+          Builder(
+            builder: (context) {
+              _scheduleLoadMore();
+              return const Center(
+                child: Padding(
+                  padding: EdgeInsets.all(18),
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+              );
+            },
+          ),
+      ],
     );
   }
 }
@@ -739,14 +753,13 @@ class MediaFileTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final isFolder = file.isDirectory();
     final image = _isImageFile(file);
-    final colorScheme = Theme.of(context).colorScheme;
     final icon = isFolder
         ? Icons.folder_outlined
         : image
         ? Icons.image_outlined
         : Icons.movie_outlined;
     final color = isFolder
-        ? colorScheme.primary
+        ? const Color(0xffffc532)
         : image
         ? const Color(0xffca8a04)
         : const Color(0xff2563eb);
@@ -754,7 +767,7 @@ class MediaFileTile extends StatelessWidget {
     if (grid) {
       return Card(
         elevation: 0,
-        color: colorScheme.surfaceContainerHigh,
+        color: Colors.white,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
         clipBehavior: Clip.antiAlias,
         child: InkWell(
@@ -787,23 +800,20 @@ class MediaFileTile extends StatelessWidget {
       );
     }
 
-    return Card(
-      elevation: 0,
-      color: colorScheme.surfaceContainerHigh,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+    return Material(
+      color: Colors.white,
       child: InkWell(
-        borderRadius: BorderRadius.circular(8),
         onTap: onTap,
         child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 11),
           child: Row(
             children: [
               Container(
-                width: compact ? 42 : 64,
-                height: compact ? 42 : 64,
+                width: compact ? 36 : 46,
+                height: compact ? 36 : 46,
                 clipBehavior: Clip.antiAlias,
                 decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(8),
+                  borderRadius: BorderRadius.circular(isFolder ? 10 : 8),
                 ),
                 child: SmbThumbnail(
                   file: file,
@@ -814,7 +824,7 @@ class MediaFileTile extends StatelessWidget {
                   delay: thumbnailDelay,
                 ),
               ),
-              const SizedBox(width: 12),
+              const SizedBox(width: 14),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -823,7 +833,10 @@ class MediaFileTile extends StatelessWidget {
                       file.name,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.titleSmall,
+                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                        color: appTextPrimary,
+                        fontWeight: FontWeight.w400,
+                      ),
                     ),
                     const SizedBox(height: 2),
                     if (!compact) ...[
@@ -832,13 +845,19 @@ class MediaFileTile extends StatelessWidget {
                         isFolder
                             ? '文件夹'
                             : '${image ? '图片' : '视频'} · ${formatBytes(file.size)}',
-                        style: Theme.of(context).textTheme.bodySmall,
+                        style: Theme.of(
+                          context,
+                        ).textTheme.bodySmall?.copyWith(color: appTextMuted),
                       ),
                     ],
                   ],
                 ),
               ),
-              Icon(isFolder ? Icons.chevron_right : Icons.open_in_full),
+              Icon(
+                isFolder ? Icons.chevron_right : Icons.play_arrow_rounded,
+                color: const Color(0xffc9c9cd),
+                size: 26,
+              ),
             ],
           ),
         ),
@@ -1054,8 +1073,11 @@ class Semaphore {
 final videoThumbnailSemaphore = Semaphore(3);
 
 Future<Uint8List> downscaleImage(Uint8List bytes, int targetWidth) async {
-  final codec = await ui.instantiateImageCodec(bytes,
-      targetWidth: targetWidth, targetHeight: targetWidth);
+  final codec = await ui.instantiateImageCodec(
+    bytes,
+    targetWidth: targetWidth,
+    targetHeight: targetWidth,
+  );
   final frame = await codec.getNextFrame();
   final image = frame.image;
   final data = await image.toByteData(format: ui.ImageByteFormat.png);

@@ -71,8 +71,13 @@ class _BrowserPageState extends State<BrowserPage> with WidgetsBindingObserver {
     WidgetsBinding.instance.addObserver(this);
     _client = widget.client;
     _streamServer = LocalSmbStreamServer(_client);
+    // Load items immediately using Dart smb_connect (for share listing)
     _itemsFuture = _startItemsLoad();
-    _nativeConnectFuture = _connectNative();
+    // Android opens a short-lived native SMB session only while ExoPlayer is
+    // active. macOS keeps its existing native streaming integration.
+    if (Platform.isMacOS) {
+      _nativeConnectFuture = _connectNative();
+    }
   }
 
   Future<void> _connectNative() async {
@@ -170,18 +175,79 @@ class _BrowserPageState extends State<BrowserPage> with WidgetsBindingObserver {
 
   Future<List<SmbFile>> _loadItems() async {
     final folder = _currentFolder;
+
+    // Use native client for everything (macOS: mount_smbfs, Android: SMBJ)
+    if (_nativeClient.isConnected) {
+      try {
+        final smbPath = folder?.path ?? r'\';
+        final nativeFiles = await _nativeClient.listFiles(smbPath);
+        final files = nativeFiles.map(_nativeFileToSmbFile).toList();
+        return files.where(_isVisibleMediaEntry).toList()..sort((a, b) {
+          final typeCompare = _sortRank(a).compareTo(_sortRank(b));
+          if (typeCompare != 0) return typeCompare;
+          return a.name.toLowerCase().compareTo(b.name.toLowerCase());
+        });
+      } catch (e) {
+        debugPrint('Native listFiles failed: $e');
+        // On macOS, if listing shares fails, prompt user to enter share name
+        if (Platform.isMacOS && folder == null && mounted) {
+          final shareName = await _promptShareName();
+          if (shareName != null && shareName.isNotEmpty) {
+            // Add the share as a folder entry
+            final shareFile = SmbFile(
+              '$shareName\\',
+              r'\',
+              shareName,
+              0,
+              0,
+              0,
+              smbDirectoryAttribute,
+              0,
+              true,
+            );
+            return [shareFile];
+          }
+        }
+      }
+    }
+
+    // Fallback to Dart smb_connect
     final files = folder == null
         ? (await _client.listShares()).map(_shareToRootFolder).toList()
         : await _client.listFiles(await _freshFolder(folder));
-    final visible = files.where(_isVisibleMediaEntry).toList()
-      ..sort((a, b) {
-        final typeCompare = _sortRank(a).compareTo(_sortRank(b));
-        if (typeCompare != 0) {
-          return typeCompare;
-        }
-        return a.name.toLowerCase().compareTo(b.name.toLowerCase());
-      });
-    return visible;
+    return files.where(_isVisibleMediaEntry).toList()..sort((a, b) {
+      final typeCompare = _sortRank(a).compareTo(_sortRank(b));
+      if (typeCompare != 0) return typeCompare;
+      return a.name.toLowerCase().compareTo(b.name.toLowerCase());
+    });
+  }
+
+  Future<String?> _promptShareName() async {
+    final controller = TextEditingController();
+    return showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('输入共享名称'),
+        content: TextField(
+          controller: controller,
+          decoration: const InputDecoration(
+            hintText: '例如: anime, movies, media',
+            labelText: '共享名称',
+          ),
+          autofocus: true,
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(controller.text.trim()),
+            child: const Text('确定'),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<SmbFile> _freshFolder(SmbFile folder) async {
@@ -204,6 +270,22 @@ class _BrowserPageState extends State<BrowserPage> with WidgetsBindingObserver {
       share.attributes | smbDirectoryAttribute,
       share.size,
       share.isExists,
+    );
+  }
+
+  /// Convert native SMB file to Dart SmbFile for UI compatibility.
+  SmbFile _nativeFileToSmbFile(SmbNativeFile file) {
+    final attrs = file.isDirectory ? smbDirectoryAttribute : 0;
+    return SmbFile(
+      file.path,
+      r'\',
+      file.path,
+      file.createTime,
+      file.lastModified,
+      0, // lastAccess
+      attrs,
+      file.size,
+      true, // isExists
     );
   }
 
@@ -259,17 +341,22 @@ class _BrowserPageState extends State<BrowserPage> with WidgetsBindingObserver {
   }
 
   Future<void> _doReconnectClient() async {
+    // Close old Dart SMB connection
     final oldClient = _client;
     final oldStreamServer = _streamServer;
     try {
       await oldStreamServer.close();
-    } catch (_) {
-      // Ignore close failures from already-broken HTTP proxy sessions.
-    }
+    } catch (_) {}
     try {
       await oldClient.close();
-    } catch (_) {
-      // Ignore close failures from already-broken SMB sessions.
+    } catch (_) {}
+
+    if (Platform.isMacOS) {
+      try {
+        await _nativeClient.disconnect();
+      } catch (_) {}
+      _nativeConnectFuture = _connectNative();
+      await _nativeConnectFuture;
     }
 
     final client = await SmbConnect.connectAuth(
@@ -278,16 +365,12 @@ class _BrowserPageState extends State<BrowserPage> with WidgetsBindingObserver {
       username: widget.server.username.trim(),
       password: widget.server.password,
     );
-
     if (_isDisposed) {
       await client.close();
       return;
     }
     _client = client;
     _streamServer = LocalSmbStreamServer(_client);
-    await _nativeClient.disconnect();
-    _nativeConnectFuture = _connectNative();
-    await _nativeConnectFuture;
   }
 
   bool _shouldReconnectAfter(Object error) {
@@ -402,46 +485,62 @@ class _BrowserPageState extends State<BrowserPage> with WidgetsBindingObserver {
     if (!mounted) return;
     final index = videos.indexWhere((item) => item.path == file.path);
     smbVideoPlaybackActive = true;
-    var reconnectAfterPlayback = false;
+    var nativePlaybackCompleted = false;
     try {
-      if (!_nativeClient.isConnected) {
+      if (Platform.isAndroid) {
+        final playbackClient = SmbNativeClient();
         try {
-          await _nativeConnectFuture?.timeout(const Duration(seconds: 8));
-        } catch (e) {
-          debugPrint('Native SMB not ready before playback, falling back: $e');
-        }
-      }
-      if (!mounted) return;
-      if (Platform.isAndroid && _nativeClient.isConnected) {
-        try {
-          await _nativeClient.playNative(
+          await playbackClient.connect(
+            host: widget.server.host.trim(),
+            domain: widget.server.domain.trim(),
+            username: widget.server.username.trim(),
+            password: widget.server.password,
+          );
+          await playbackClient.playNative(
             paths: videos.map((item) => item.path).toList(),
             names: videos.map((item) => item.name).toList(),
             initialIndex: index < 0 ? 0 : index,
           );
-          reconnectAfterPlayback = true;
+          nativePlaybackCompleted = true;
         } catch (e) {
-          debugPrint('Native SMB player failed, falling back: $e');
+          debugPrint('Native ExoPlayer playback failed, falling back: $e');
+        } finally {
+          await playbackClient.disconnect();
+        }
+      } else if (Platform.isMacOS) {
+        // Keep the existing macOS native stream server integration.
+        if (!_nativeClient.isConnected) {
+          try {
+            await _nativeConnectFuture?.timeout(const Duration(seconds: 15));
+          } catch (e) {
+            debugPrint('Native SMB not ready before playback: $e');
+          }
         }
       }
+
       if (!mounted) return;
-      if (!reconnectAfterPlayback) {
-        await Navigator.of(context).push(
-          MaterialPageRoute<void>(
-            builder: (_) => VideoPlayerPage(
-              client: _client,
-              streamServer: _streamServer,
-              nativeClient: _nativeClient.isConnected ? _nativeClient : null,
-              videos: videos,
-              initialIndex: index < 0 ? 0 : index,
+      if (!nativePlaybackCompleted) {
+        try {
+          await Navigator.of(context).push(
+            MaterialPageRoute<void>(
+              builder: (_) => VideoPlayerPage(
+                client: _client,
+                streamServer: _streamServer,
+                nativeClient: _nativeClient.isConnected ? _nativeClient : null,
+                videos: videos,
+                initialIndex: index < 0 ? 0 : index,
+              ),
             ),
-          ),
-        );
+          );
+        } catch (e) {
+          debugPrint('Fallback SMB player failed: $e');
+          rethrow;
+        }
       }
     } finally {
       smbVideoPlaybackActive = false;
     }
-    _refresh(reconnect: reconnectAfterPlayback);
+    _refresh();
   }
 
   String _title() {
@@ -462,7 +561,7 @@ class _BrowserPageState extends State<BrowserPage> with WidgetsBindingObserver {
         }
       },
       child: AppPageShell(
-        title: '文件源',
+        title: '文件服务',
         subtitle: _stack.isEmpty ? widget.server.displayName : _title(),
         leading: _stack.isEmpty
             ? null
@@ -914,6 +1013,9 @@ class _SmbThumbnailState extends State<SmbThumbnail> {
   Future<void> _load() async {
     final file = widget.file;
     if (file.isDirectory()) return;
+
+    // On macOS, skip thumbnail loading — Dart smb_connect is unreliable
+    if (Platform.isMacOS) return;
 
     // Stagger thumbnail loading so the list renders first
     if (widget.delay != Duration.zero) {

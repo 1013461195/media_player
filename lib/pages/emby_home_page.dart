@@ -9,8 +9,9 @@ import '../utils.dart';
 import '../widgets/common.dart';
 import '../players/network_video_player_page.dart';
 import 'browser_page.dart';
+import 'emby_detail_page.dart';
 import 'emby_library_page.dart';
-import 'emby_series_page.dart';
+import 'emby_search_page.dart';
 import 'server_home_page.dart';
 
 class EmbyHomePage extends StatefulWidget {
@@ -25,6 +26,8 @@ class EmbyHomePage extends StatefulWidget {
 class _EmbyHomePageState extends State<EmbyHomePage> {
   late Future<({List<EmbyItem> latest, List<EmbyItem> libraries})> _future =
       _load();
+  Future<List<EmbyItem>>? _favoritesFuture;
+  bool _showFavorites = false;
 
   Future<({List<EmbyItem> latest, List<EmbyItem> libraries})> _load() async {
     final latest = await widget.client.latest();
@@ -67,7 +70,23 @@ class _EmbyHomePageState extends State<EmbyHomePage> {
   }
 
   void _refresh() {
-    setState(() => _future = _load());
+    setState(() {
+      if (_showFavorites) {
+        _favoritesFuture = widget.client.favorites();
+      } else {
+        _future = _load();
+      }
+    });
+  }
+
+  void _selectSection(bool favorites) {
+    if (_showFavorites == favorites) return;
+    setState(() {
+      _showFavorites = favorites;
+      if (favorites) {
+        _favoritesFuture = widget.client.favorites();
+      }
+    });
   }
 
   @override
@@ -87,7 +106,15 @@ class _EmbyHomePageState extends State<EmbyHomePage> {
         ),
       ),
       actions: [
-        AppCircleButton(icon: Icons.search, tooltip: '刷新', onPressed: _refresh),
+        AppCircleButton(
+          icon: Icons.search,
+          tooltip: '搜索',
+          onPressed: () => Navigator.of(context).push(
+            MaterialPageRoute<void>(
+              builder: (_) => EmbySearchPage(client: widget.client),
+            ),
+          ),
+        ),
         AppCircleButton(
           icon: Icons.more_horiz,
           tooltip: '切换服务器',
@@ -116,10 +143,19 @@ class _EmbyHomePageState extends State<EmbyHomePage> {
             );
           }
           final data = snapshot.data!;
+          if (_showFavorites) {
+            return _FavoritesBody(
+              future: _favoritesFuture ??= widget.client.favorites(),
+              client: widget.client,
+              onSelectSection: _selectSection,
+              onOpen: _openEmbyItem,
+              onRetry: _refresh,
+            );
+          }
           return ListView(
             padding: const EdgeInsets.fromLTRB(20, 0, 0, 96),
             children: [
-              const _EmbyTabs(),
+              _EmbyTabs(showFavorites: false, onChanged: _selectSection),
               const SizedBox(height: 18),
               if (data.libraries.isNotEmpty) ...[
                 Text(
@@ -180,9 +216,15 @@ class _EmbyHomePageState extends State<EmbyHomePage> {
     );
   }
 
-  void _openEmbyItem(EmbyItem item) {
-    if (item.playable) {
-      Navigator.of(context).push(
+  Future<void> _openEmbyItem(EmbyItem item) async {
+    if (item.isMovie || item.isSeries) {
+      await Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => EmbyDetailPage(client: widget.client, item: item),
+        ),
+      );
+    } else if (item.playable) {
+      await Navigator.of(context).push(
         MaterialPageRoute<void>(
           builder: (_) => NetworkVideoPlayerPage(
             title: item.name,
@@ -191,19 +233,84 @@ class _EmbyHomePageState extends State<EmbyHomePage> {
           ),
         ),
       );
-    } else if (item.isSeries) {
-      Navigator.of(context).push(
-        MaterialPageRoute<void>(
-          builder: (_) => EmbySeriesPage(client: widget.client, series: item),
-        ),
-      );
     } else {
-      Navigator.of(context).push(
+      await Navigator.of(context).push(
         MaterialPageRoute<void>(
           builder: (_) => EmbyLibraryPage(client: widget.client, library: item),
         ),
       );
     }
+    if (mounted && _showFavorites) {
+      setState(() => _favoritesFuture = widget.client.favorites());
+    }
+  }
+}
+
+class _FavoritesBody extends StatelessWidget {
+  const _FavoritesBody({
+    required this.future,
+    required this.client,
+    required this.onSelectSection,
+    required this.onOpen,
+    required this.onRetry,
+  });
+
+  final Future<List<EmbyItem>> future;
+  final EmbyClient client;
+  final ValueChanged<bool> onSelectSection;
+  final ValueChanged<EmbyItem> onOpen;
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(left: 20),
+          child: _EmbyTabs(showFavorites: true, onChanged: onSelectSection),
+        ),
+        const SizedBox(height: 16),
+        Expanded(
+          child: FutureBuilder<List<EmbyItem>>(
+            future: future,
+            builder: (context, snapshot) {
+              if (snapshot.connectionState != ConnectionState.done) {
+                return const Center(child: CircularProgressIndicator());
+              }
+              if (snapshot.hasError) {
+                return ErrorState(
+                  message: '读取收藏失败：${friendlyError(snapshot.error)}',
+                  onRetry: onRetry,
+                );
+              }
+              final items = snapshot.data ?? const <EmbyItem>[];
+              if (items.isEmpty) {
+                return const Center(child: Text('还没有收藏内容'));
+              }
+              return GridView.builder(
+                padding: const EdgeInsets.fromLTRB(20, 0, 20, 96),
+                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                  crossAxisCount: 3,
+                  crossAxisSpacing: 10,
+                  mainAxisSpacing: 12,
+                  childAspectRatio: 0.62,
+                ),
+                itemCount: items.length,
+                itemBuilder: (context, index) {
+                  final item = items[index];
+                  return EmbyPosterCard(
+                    item: item,
+                    imageUri: client.imageUri(item),
+                    onTap: () => onOpen(item),
+                  );
+                },
+              );
+            },
+          ),
+        ),
+      ],
+    );
   }
 }
 
@@ -294,22 +401,22 @@ class _EmbyLibrarySectionState extends State<EmbyLibrarySection> {
                     imageUri: widget.client.imageUri(item),
                     width: 112,
                     onTap: () {
-                      if (item.playable) {
+                      if (item.isMovie || item.isSeries) {
+                        Navigator.of(context).push(
+                          MaterialPageRoute<void>(
+                            builder: (_) => EmbyDetailPage(
+                              client: widget.client,
+                              item: item,
+                            ),
+                          ),
+                        );
+                      } else if (item.playable) {
                         Navigator.of(context).push(
                           MaterialPageRoute<void>(
                             builder: (_) => NetworkVideoPlayerPage(
                               title: item.name,
                               client: widget.client,
                               item: item,
-                            ),
-                          ),
-                        );
-                      } else if (item.isSeries) {
-                        Navigator.of(context).push(
-                          MaterialPageRoute<void>(
-                            builder: (_) => EmbySeriesPage(
-                              client: widget.client,
-                              series: item,
                             ),
                           ),
                         );
@@ -468,42 +575,72 @@ class EmbyPosterCard extends StatelessWidget {
 }
 
 class _EmbyTabs extends StatelessWidget {
-  const _EmbyTabs();
+  const _EmbyTabs({required this.showFavorites, required this.onChanged});
+
+  final bool showFavorites;
+  final ValueChanged<bool> onChanged;
 
   @override
   Widget build(BuildContext context) {
     return Row(
       children: [
-        Column(
+        _EmbyTabButton(
+          label: '首页',
+          selected: !showFavorites,
+          onTap: () => onChanged(false),
+        ),
+        const SizedBox(width: 34),
+        _EmbyTabButton(
+          label: '收藏',
+          selected: showFavorites,
+          onTap: () => onChanged(true),
+        ),
+      ],
+    );
+  }
+}
+
+class _EmbyTabButton extends StatelessWidget {
+  const _EmbyTabButton({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = selected ? appAccent : appTextPrimary;
+    return InkWell(
+      onTap: selected ? null : onTap,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 4),
+        child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              '首页',
+              label,
               style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                color: appAccent,
-                fontWeight: FontWeight.w700,
+                color: color,
+                fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
               ),
             ),
             const SizedBox(height: 6),
-            Container(
+            AnimatedContainer(
+              duration: const Duration(milliseconds: 180),
               width: 48,
               height: 3,
               decoration: BoxDecoration(
-                color: appAccent,
+                color: selected ? appAccent : Colors.transparent,
                 borderRadius: BorderRadius.circular(999),
               ),
             ),
           ],
         ),
-        const SizedBox(width: 34),
-        Text(
-          '收藏',
-          style: Theme.of(context).textTheme.titleLarge?.copyWith(
-            color: appTextPrimary,
-            fontWeight: FontWeight.w500,
-          ),
-        ),
-      ],
+      ),
     );
   }
 }

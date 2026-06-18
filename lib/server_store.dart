@@ -1,15 +1,17 @@
 import 'dart:convert';
 
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'models.dart';
 import 'utils.dart';
 
 class ServerStore {
-  static const _storage = FlutterSecureStorage();
+  static Future<SharedPreferences> get _prefs async =>
+      SharedPreferences.getInstance();
 
   static Future<List<ServerConfig>> loadServers() async {
-    final raw = await _storage.read(key: serversPrefKey);
+    final prefs = await _prefs;
+    final raw = prefs.getString(serversPrefKey);
     if (raw == null || raw.isEmpty) {
       return [];
     }
@@ -21,11 +23,13 @@ class ServerStore {
   }
 
   static Future<String?> loadLastServerId() async {
-    return _storage.read(key: lastServerIdPrefKey);
+    final prefs = await _prefs;
+    return prefs.getString(lastServerIdPrefKey);
   }
 
   static Future<void> saveLastServerId(String id) async {
-    await _storage.write(key: lastServerIdPrefKey, value: id);
+    final prefs = await _prefs;
+    await prefs.setString(lastServerIdPrefKey, id);
   }
 
   static Future<void> saveServer(ServerConfig server) async {
@@ -46,9 +50,10 @@ class ServerStore {
   }
 
   static Future<void> _saveServers(List<ServerConfig> servers) async {
-    await _storage.write(
-      key: serversPrefKey,
-      value: jsonEncode(servers.map((server) => server.toJson()).toList()),
+    final prefs = await _prefs;
+    await prefs.setString(
+      serversPrefKey,
+      jsonEncode(servers.map((server) => server.toJson()).toList()),
     );
   }
 }

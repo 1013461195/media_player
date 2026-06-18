@@ -8,6 +8,9 @@ class MainFlutterWindow: NSWindow {
     self.contentViewController = flutterViewController
     self.setFrame(windowFrame, display: true)
 
+    // Register native SMB plugin
+    SmbPlugin.register(with: flutterViewController.registrar(forPlugin: "SmbPlugin"))
+
     RegisterGeneratedPlugins(registry: flutterViewController)
 
     super.awakeFromNib()

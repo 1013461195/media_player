@@ -23,10 +23,9 @@ class InfoRow extends StatelessWidget {
             width: 72,
             child: Text(
               label,
-              style: Theme.of(context)
-                  .textTheme
-                  .bodySmall
-                  ?.copyWith(color: Colors.grey),
+              style: Theme.of(
+                context,
+              ).textTheme.bodySmall?.copyWith(color: Colors.grey),
             ),
           ),
           Expanded(child: Text(value)),
@@ -106,9 +105,9 @@ class _ImageViewerPageState extends State<ImageViewerPage> {
     } catch (error) {
       if (!mounted) return;
       setState(() => _isDeleting = false);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('删除失败：${friendlyError(error)}')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('删除失败：${friendlyError(error)}')));
     }
   }
 
@@ -123,18 +122,13 @@ class _ImageViewerPageState extends State<ImageViewerPage> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(_file.name,
-                  style: Theme.of(context).textTheme.titleLarge),
+              Text(_file.name, style: Theme.of(context).textTheme.titleLarge),
               const SizedBox(height: 16),
               InfoRow(label: '路径', value: _file.path),
               InfoRow(label: '大小', value: formatBytes(_file.size)),
-              InfoRow(
-                  label: '创建时间', value: formatDate(_file.createTime)),
-              InfoRow(
-                  label: '修改时间',
-                  value: formatDate(_file.lastModified)),
-              InfoRow(
-                  label: '只读', value: _file.isReadonly() ? '是' : '否'),
+              InfoRow(label: '创建时间', value: formatDate(_file.createTime)),
+              InfoRow(label: '修改时间', value: formatDate(_file.lastModified)),
+              InfoRow(label: '只读', value: _file.isReadonly() ? '是' : '否'),
             ],
           ),
         ),
@@ -154,8 +148,7 @@ class _ImageViewerPageState extends State<ImageViewerPage> {
           icon: const Icon(Icons.arrow_back),
           onPressed: () => Navigator.of(context).pop(),
         ),
-        title:
-            Text(_file.name, maxLines: 1, overflow: TextOverflow.ellipsis),
+        title: Text(_file.name, maxLines: 1, overflow: TextOverflow.ellipsis),
         actions: [
           IconButton(
             tooltip: '图片信息',
@@ -183,8 +176,7 @@ class _ImageViewerPageState extends State<ImageViewerPage> {
           if (snapshot.hasError) {
             return ErrorState(
               message: '图片加载失败：${friendlyError(snapshot.error)}',
-              onRetry: () =>
-                  setState(() => _imageFuture = _loadImage()),
+              onRetry: () => setState(() => _imageFuture = _loadImage()),
               dark: true,
             );
           }

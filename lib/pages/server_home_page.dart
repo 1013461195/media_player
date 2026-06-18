@@ -146,7 +146,7 @@ class _ServerHomePageState extends State<ServerHomePage> {
   @override
   Widget build(BuildContext context) {
     return AppPageShell(
-      title: '影视服务器',
+      title: '服务管理',
       actions: [
         AppCircleButton(
           icon: Icons.more_horiz,
@@ -165,45 +165,36 @@ class _ServerHomePageState extends State<ServerHomePage> {
             return const Center(child: CircularProgressIndicator());
           }
           final servers = snapshot.data ?? const <ServerConfig>[];
-          if (servers.isEmpty) {
-            return EmptyServerState(onAdd: _addServer);
-          }
+          final fileServers = servers
+              .where((server) => server.category == ServerCategory.fileService)
+              .toList();
+          final mediaServers = servers
+              .where((server) => server.category == ServerCategory.mediaServer)
+              .toList();
           return ListView(
             padding: const EdgeInsets.only(bottom: 96),
             children: [
-              const AppSectionLabel('已连接'),
+              if (fileServers.isNotEmpty) ...[
+                const AppSectionLabel('文件服务'),
+                _ServerGroup(
+                  servers: fileServers,
+                  connectingId: _connectingId,
+                  onConnect: _connect,
+                  onEdit: _editServer,
+                ),
+              ],
+              if (mediaServers.isNotEmpty) ...[
+                const AppSectionLabel('媒体服务器'),
+                _ServerGroup(
+                  servers: mediaServers,
+                  connectingId: _connectingId,
+                  onConnect: _connect,
+                  onEdit: _editServer,
+                ),
+              ],
+              const AppSectionLabel('添加文件服务'),
               AppGroupedList(
                 children: [
-                  for (var index = 0; index < servers.length; index++) ...[
-                    ServerTile(
-                      server: servers[index],
-                      isConnecting:
-                          _isConnecting && _connectingId == servers[index].id,
-                      onTap: () => _connect(servers[index]),
-                      onEdit: () => _editServer(servers[index]),
-                    ),
-                    if (index != servers.length - 1) const AppListDivider(),
-                  ],
-                ],
-              ),
-              const AppSectionLabel('连接到...'),
-              AppGroupedList(
-                children: [
-                  ServerKindTile(
-                    icon: Icons.play_arrow_rounded,
-                    label: 'Emby',
-                    color: const Color(0xff35bd4c),
-                    onTap: () async {
-                      final server = await showServerEditor(
-                        context,
-                        defaultKind: ServerKind.emby,
-                      );
-                      if (server == null) return;
-                      await ServerStore.saveServer(server);
-                      _reloadServers();
-                    },
-                  ),
-                  const AppListDivider(),
                   ServerKindTile(
                     icon: Icons.folder_rounded,
                     label: 'SMB',
@@ -220,10 +211,60 @@ class _ServerHomePageState extends State<ServerHomePage> {
                   ),
                 ],
               ),
+              const AppSectionLabel('添加媒体服务器'),
+              AppGroupedList(
+                children: [
+                  ServerKindTile(
+                    icon: Icons.play_arrow_rounded,
+                    label: 'Emby',
+                    color: const Color(0xff35bd4c),
+                    onTap: () async {
+                      final server = await showServerEditor(
+                        context,
+                        defaultKind: ServerKind.emby,
+                      );
+                      if (server == null) return;
+                      await ServerStore.saveServer(server);
+                      _reloadServers();
+                    },
+                  ),
+                ],
+              ),
             ],
           );
         },
       ),
+    );
+  }
+}
+
+class _ServerGroup extends StatelessWidget {
+  const _ServerGroup({
+    required this.servers,
+    required this.connectingId,
+    required this.onConnect,
+    required this.onEdit,
+  });
+
+  final List<ServerConfig> servers;
+  final String? connectingId;
+  final ValueChanged<ServerConfig> onConnect;
+  final ValueChanged<ServerConfig> onEdit;
+
+  @override
+  Widget build(BuildContext context) {
+    return AppGroupedList(
+      children: [
+        for (var index = 0; index < servers.length; index++) ...[
+          ServerTile(
+            server: servers[index],
+            isConnecting: connectingId == servers[index].id,
+            onTap: () => onConnect(servers[index]),
+            onEdit: () => onEdit(servers[index]),
+          ),
+          if (index != servers.length - 1) const AppListDivider(),
+        ],
+      ],
     );
   }
 }
@@ -251,7 +292,7 @@ class EmptyServerState extends StatelessWidget {
           const SizedBox(height: 14),
           Text('还没有服务器', style: Theme.of(context).textTheme.titleMedium),
           const SizedBox(height: 8),
-          const Text('添加 NAS 后会自动记住，下次打开直接进入上次服务器'),
+          const Text('添加服务后会自动记住，下次打开直接进入上次使用的服务'),
           const SizedBox(height: 18),
           FilledButton.icon(
             onPressed: onAdd,
@@ -376,7 +417,7 @@ class ServerTile extends StatelessWidget {
                     ),
                     const SizedBox(height: 2),
                     Text(
-                      '${server.kind == ServerKind.emby ? 'Emby' : 'SMB'} - ${server.host}',
+                      '${server.kind.protocolLabel} - ${server.host}',
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: Theme.of(context).textTheme.bodySmall?.copyWith(
@@ -577,12 +618,12 @@ class _ServerEditorSheetState extends State<ServerEditorSheet> {
                   ButtonSegment(
                     value: ServerKind.smb,
                     icon: Icon(Icons.folder_shared_outlined),
-                    label: Text('SMB'),
+                    label: Text('文件 · SMB'),
                   ),
                   ButtonSegment(
                     value: ServerKind.emby,
                     icon: Icon(Icons.connected_tv_outlined),
-                    label: Text('Emby'),
+                    label: Text('媒体 · Emby'),
                   ),
                 ],
                 selected: {_kind},
@@ -861,22 +902,41 @@ class _ServerSwitcherSheetState extends State<ServerSwitcherSheet> {
                   );
                 }
                 final servers = snapshot.data ?? const <ServerConfig>[];
+                final fileServers = servers
+                    .where(
+                      (server) => server.category == ServerCategory.fileService,
+                    )
+                    .toList();
+                final mediaServers = servers
+                    .where(
+                      (server) => server.category == ServerCategory.mediaServer,
+                    )
+                    .toList();
                 return Flexible(
-                  child: ListView.separated(
+                  child: ListView(
                     shrinkWrap: true,
-                    itemCount: servers.length,
-                    separatorBuilder: (_, _) => const SizedBox(height: 8),
-                    itemBuilder: (context, index) {
-                      final server = servers[index];
-                      final current = server.id == widget.currentServerId;
-                      return ServerTile(
-                        server: server,
-                        isConnecting: false,
-                        onTap: () => Navigator.of(context).pop(server),
-                        onEdit: () => _editServer(server),
-                        highlighted: current,
-                      );
-                    },
+                    children: [
+                      if (fileServers.isNotEmpty) ...[
+                        const _SwitcherSectionLabel('文件服务'),
+                        _SwitcherServerGroup(
+                          servers: fileServers,
+                          currentServerId: widget.currentServerId,
+                          onSelect: (server) =>
+                              Navigator.of(context).pop(server),
+                          onEdit: _editServer,
+                        ),
+                      ],
+                      if (mediaServers.isNotEmpty) ...[
+                        const _SwitcherSectionLabel('媒体服务器'),
+                        _SwitcherServerGroup(
+                          servers: mediaServers,
+                          currentServerId: widget.currentServerId,
+                          onSelect: (server) =>
+                              Navigator.of(context).pop(server),
+                          onEdit: _editServer,
+                        ),
+                      ],
+                    ],
                   ),
                 );
               },
@@ -884,6 +944,58 @@ class _ServerSwitcherSheetState extends State<ServerSwitcherSheet> {
           ],
         ),
       ),
+    );
+  }
+}
+
+class _SwitcherSectionLabel extends StatelessWidget {
+  const _SwitcherSectionLabel(this.label);
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(2, 10, 2, 6),
+      child: Text(
+        label,
+        style: Theme.of(
+          context,
+        ).textTheme.labelLarge?.copyWith(color: appTextMuted),
+      ),
+    );
+  }
+}
+
+class _SwitcherServerGroup extends StatelessWidget {
+  const _SwitcherServerGroup({
+    required this.servers,
+    required this.currentServerId,
+    required this.onSelect,
+    required this.onEdit,
+  });
+
+  final List<ServerConfig> servers;
+  final String currentServerId;
+  final ValueChanged<ServerConfig> onSelect;
+  final ValueChanged<ServerConfig> onEdit;
+
+  @override
+  Widget build(BuildContext context) {
+    return AppGroupedList(
+      margin: EdgeInsets.zero,
+      children: [
+        for (var index = 0; index < servers.length; index++) ...[
+          ServerTile(
+            server: servers[index],
+            isConnecting: false,
+            onTap: () => onSelect(servers[index]),
+            onEdit: () => onEdit(servers[index]),
+            highlighted: servers[index].id == currentServerId,
+          ),
+          if (index != servers.length - 1) const AppListDivider(),
+        ],
+      ],
     );
   }
 }

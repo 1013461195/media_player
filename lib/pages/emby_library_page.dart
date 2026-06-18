@@ -5,7 +5,7 @@ import '../models.dart';
 import '../utils.dart';
 import '../widgets/common.dart';
 import '../players/network_video_player_page.dart';
-import 'emby_series_page.dart';
+import 'emby_detail_page.dart';
 import 'emby_home_page.dart';
 
 class EmbyLibraryPage extends StatefulWidget {
@@ -37,7 +37,13 @@ class _EmbyLibraryPageState extends State<EmbyLibraryPage> {
   }
 
   void _openItem(EmbyItem item) {
-    if (item.playable) {
+    if (item.isMovie || item.isSeries) {
+      Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => EmbyDetailPage(client: widget.client, item: item),
+        ),
+      );
+    } else if (item.playable) {
       Navigator.of(context).push(
         MaterialPageRoute<void>(
           builder: (_) => NetworkVideoPlayerPage(
@@ -45,12 +51,6 @@ class _EmbyLibraryPageState extends State<EmbyLibraryPage> {
             client: widget.client,
             item: item,
           ),
-        ),
-      );
-    } else if (item.isSeries) {
-      Navigator.of(context).push(
-        MaterialPageRoute<void>(
-          builder: (_) => EmbySeriesPage(client: widget.client, series: item),
         ),
       );
     } else {

@@ -59,10 +59,10 @@ class SmbNativeClient {
 
   Future<List<SmbNativeFile>> listFiles(String path) async {
     _assertConnected();
-    final result = await _channel.invokeMethod<List<dynamic>>(
-      'smbListFiles',
-      {'sessionId': _sessionId, 'path': path},
-    );
+    final result = await _channel.invokeMethod<List<dynamic>>('smbListFiles', {
+      'sessionId': _sessionId,
+      'path': path,
+    });
     if (result == null) return [];
     return result
         .map((item) => SmbNativeFile.fromMap(item as Map<dynamic, dynamic>))

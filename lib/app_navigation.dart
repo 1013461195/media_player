@@ -27,31 +27,38 @@ Future<void> openAppTab(
     case AppTab.settings:
       _replace(context, const SettingsPage());
     case AppTab.media:
-      await _openServerKind(context, ServerKind.emby, currentServer);
+      await _openServerCategory(
+        context,
+        ServerCategory.mediaServer,
+        currentServer,
+      );
     case AppTab.files:
-      await _openServerKind(context, ServerKind.smb, currentServer);
+      await _openServerCategory(
+        context,
+        ServerCategory.fileService,
+        currentServer,
+      );
   }
 }
 
-Future<void> _openServerKind(
+Future<void> _openServerCategory(
   BuildContext context,
-  ServerKind kind,
+  ServerCategory category,
   ServerConfig? currentServer,
 ) async {
-  final server = await _preferredServer(kind, currentServer);
+  final server = await _preferredServer(category, currentServer);
   if (server == null) {
     if (context.mounted) {
-      final label = kind == ServerKind.emby ? '媒体库' : '文件源';
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text('还没有可打开的$label服务器，请先添加')));
+      ).showSnackBar(SnackBar(content: Text('还没有可打开的${category.label}，请先添加')));
       _replace(context, const ServerHomePage(autoConnect: false));
     }
     return;
   }
 
   try {
-    if (kind == ServerKind.emby) {
+    if (server.category == ServerCategory.mediaServer) {
       final client = await EmbyClient(server).authenticate();
       await ServerStore.saveServer(client.config);
       await ServerStore.saveLastServerId(client.config.id);
@@ -84,21 +91,21 @@ Future<void> _openServerKind(
 }
 
 Future<ServerConfig?> _preferredServer(
-  ServerKind kind,
+  ServerCategory category,
   ServerConfig? currentServer,
 ) async {
-  if (currentServer?.kind == kind) {
+  if (currentServer?.category == category) {
     return currentServer;
   }
   final servers = await ServerStore.loadServers();
   final lastId = await ServerStore.loadLastServerId();
   final last = servers
-      .where((server) => server.kind == kind && server.id == lastId)
+      .where((server) => server.category == category && server.id == lastId)
       .firstOrNull;
   if (last != null) {
     return last;
   }
-  return servers.where((server) => server.kind == kind).firstOrNull;
+  return servers.where((server) => server.category == category).firstOrNull;
 }
 
 void _replace(BuildContext context, Widget page) {

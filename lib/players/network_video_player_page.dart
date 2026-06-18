@@ -44,8 +44,8 @@ class _NetworkVideoPlayerPageState extends State<NetworkVideoPlayerPage> {
   EmbyVideoQuality _quality = EmbyVideoQuality.original;
   bool _dolbyVisionChecked = false;
   Timer? _progressTimer;
-  final String _playSessionId = DateTime.now().microsecondsSinceEpoch
-      .toString();
+  String _playSessionId = DateTime.now().microsecondsSinceEpoch.toString();
+  String _playMethod = 'DirectPlay';
 
   @override
   void initState() {
@@ -78,6 +78,7 @@ class _NetworkVideoPlayerPageState extends State<NetworkVideoPlayerPage> {
       await widget.client.reportPlaybackStart(
         widget.item,
         playSessionId: _playSessionId,
+        playMethod: _playMethod,
       );
     } catch (_) {}
   }
@@ -91,6 +92,7 @@ class _NetworkVideoPlayerPageState extends State<NetworkVideoPlayerPage> {
         positionTicks: position.inMicroseconds * 10,
         isPaused: isPaused,
         playSessionId: _playSessionId,
+        playMethod: _playMethod,
       );
     } catch (_) {}
   }
@@ -133,10 +135,14 @@ class _NetworkVideoPlayerPageState extends State<NetworkVideoPlayerPage> {
   }
 
   Future<void> _prepareVideo() async {
+    _playMethod = (_quality.height != null || _quality.bitrate != null)
+        ? 'Transcode'
+        : 'DirectPlay';
     final uri = widget.client.streamUri(
       widget.item,
       maxHeight: _quality.height,
       maxBitrate: _quality.bitrate,
+      playSessionId: _playSessionId,
     );
     debugPrint('[Player] Opening stream: $uri');
     await _checkDolbyVisionSupport(uri.toString());
@@ -148,6 +154,12 @@ class _NetworkVideoPlayerPageState extends State<NetworkVideoPlayerPage> {
 
   Future<void> _changeQuality(EmbyVideoQuality quality) async {
     if (quality == _quality) return;
+    // Stop current stream and report to Emby server
+    _progressTimer?.cancel();
+    await _reportPlaybackStopped();
+    await _player.stop();
+    // Generate new session for the new stream
+    _playSessionId = DateTime.now().microsecondsSinceEpoch.toString();
     setState(() {
       _quality = quality;
       _prepareFuture = _prepareVideo();

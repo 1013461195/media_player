@@ -125,6 +125,9 @@ class EmbyItem {
     this.people = const [],
     this.mediaSources = const [],
     this.isFavorite = false,
+    this.playbackPositionTicks = 0,
+    this.playedPercentage,
+    this.played = false,
   });
 
   final String id;
@@ -144,10 +147,26 @@ class EmbyItem {
   final List<EmbyMediaSource> mediaSources;
   final bool isFavorite;
 
+  /// 播放位置（ticks），1 tick = 100 纳秒
+  final int playbackPositionTicks;
+
+  /// 播放进度百分比 (0-100)
+  final double? playedPercentage;
+
+  /// 是否已播放完成
+  final bool played;
+
   bool get playable => const {'Movie', 'Episode', 'Video'}.contains(type);
   bool get isSeries => type == 'Series';
   bool get isMovie => type == 'Movie';
   bool get isEpisode => type == 'Episode';
+
+  /// 是否有播放进度（播放过但未完成）
+  bool get hasProgress =>
+      !played &&
+      playbackPositionTicks > 0 &&
+      playedPercentage != null &&
+      playedPercentage! > 0;
 
   Duration? get runtime =>
       runTimeTicks == null ? null : Duration(microseconds: runTimeTicks! ~/ 10);

@@ -23,6 +23,8 @@ class _EmbyDetailPageState extends State<EmbyDetailPage> {
   EmbyItem? _selectedEpisode;
   final Map<String, bool> _favoriteOverrides = {};
   final Set<String> _updatingFavorites = {};
+  final Map<String, bool> _playedOverrides = {};
+  final Set<String> _updatingPlayed = {};
 
   @override
   void dispose() {
@@ -31,20 +33,70 @@ class _EmbyDetailPageState extends State<EmbyDetailPage> {
   }
 
   Future<_EmbyDetailData> _load() async {
+    debugPrint('[EmbyDetail] 加载详情: ${widget.item.name} (${widget.item.type})');
     final detail = await widget.client.itemDetails(widget.item);
+    debugPrint('[EmbyDetail] 详情加载完成: ${detail.name}, isSeries=${detail.isSeries}');
     if (!detail.isSeries) {
       return _EmbyDetailData(detail: detail);
     }
 
     final seasons = await widget.client.seriesSeasons(detail);
-    final selected = _selectedSeason ?? seasons.firstOrNull;
-    final episodes = selected == null
+    debugPrint('[EmbyDetail] 季数: ${seasons.length}');
+
+    // 自动选择有播放进度的季
+    EmbyItem? selectedSeason = _selectedSeason;
+    if (selectedSeason == null) {
+      // 查找有播放进度的季
+      for (final season in seasons) {
+        final seasonEpisodes = await widget.client.seasonEpisodes(detail, season);
+        final hasProgress = seasonEpisodes.any((ep) => ep.hasProgress || ep.played);
+        if (hasProgress) {
+          selectedSeason = season;
+          debugPrint('[EmbyDetail] 找到有播放进度的季: ${season.name}');
+          break;
+        }
+      }
+      selectedSeason ??= seasons.firstOrNull;
+    }
+
+    debugPrint('[EmbyDetail] 选中季: ${selectedSeason?.name}');
+    final episodes = selectedSeason == null
         ? const <EmbyItem>[]
-        : await widget.client.seasonEpisodes(detail, selected);
+        : await widget.client.seasonEpisodes(detail, selectedSeason);
+    debugPrint('[EmbyDetail] 剧集数: ${episodes.length}');
+
+    // 自动选择最新播放的剧集
+    if (_selectedEpisode == null) {
+      // 优先选择有播放进度但未完成的剧集
+      EmbyItem? latestProgress;
+      for (final ep in episodes.reversed) {
+        if (ep.hasProgress) {
+          latestProgress = ep;
+          break;
+        }
+      }
+      // 如果没有正在播放的，选择最后一个已播放的下一个
+      if (latestProgress == null) {
+        for (int i = episodes.length - 1; i >= 0; i--) {
+          if (episodes[i].played) {
+            // 选择已播放剧集的下一集
+            if (i + 1 < episodes.length) {
+              latestProgress = episodes[i + 1];
+            }
+            break;
+          }
+        }
+      }
+      if (latestProgress != null) {
+        debugPrint('[EmbyDetail] 自动选中剧集: ${latestProgress.name}');
+        _selectedEpisode = latestProgress;
+      }
+    }
+
     return _EmbyDetailData(
       detail: detail,
       seasons: seasons,
-      selectedSeason: selected,
+      selectedSeason: selectedSeason,
       episodes: episodes,
     );
   }
@@ -52,7 +104,7 @@ class _EmbyDetailPageState extends State<EmbyDetailPage> {
   void _selectSeason(EmbyItem season) {
     setState(() {
       _selectedSeason = season;
-      _selectedEpisode = null;
+      _selectedEpisode = null; // 重置以便重新自动选择
       _future = _load();
     });
   }
@@ -106,6 +158,29 @@ class _EmbyDetailPageState extends State<EmbyDetailPage> {
     }
   }
 
+  Future<void> _togglePlayed(EmbyItem item) async {
+    if (_updatingPlayed.contains(item.id)) return;
+    final current = _playedOverrides[item.id] ?? item.played;
+    final next = !current;
+    setState(() {
+      _updatingPlayed.add(item.id);
+      _playedOverrides[item.id] = next;
+    });
+    try {
+      await widget.client.setPlayed(item, next);
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _playedOverrides[item.id] = current);
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('标记失败：${friendlyError(error)}')));
+    } finally {
+      if (mounted) {
+        setState(() => _updatingPlayed.remove(item.id));
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -149,6 +224,13 @@ class _EmbyDetailPageState extends State<EmbyDetailPage> {
           final updatingFavorite = _updatingFavorites.contains(
             favoriteTarget.id,
           );
+          final playedTarget = selectedEpisode ?? detail;
+          final played =
+              _playedOverrides[playedTarget.id] ??
+              playedTarget.played;
+          final updatingPlayed = _updatingPlayed.contains(
+            playedTarget.id,
+          );
           return CustomScrollView(
             controller: _scrollController,
             slivers: [
@@ -188,6 +270,35 @@ class _EmbyDetailPageState extends State<EmbyDetailPage> {
                       ),
                     ],
                     const SizedBox(height: 18),
+                    // 显示当前播放进度信息
+                    if (selectedEpisode != null &&
+                        (selectedEpisode.hasProgress || selectedEpisode.played))
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 12),
+                        child: Row(
+                          children: [
+                            Icon(
+                              selectedEpisode.played
+                                  ? Icons.check_circle
+                                  : Icons.play_circle,
+                              color: appAccent,
+                              size: 20,
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                selectedEpisode.played
+                                    ? '已看完 ${_formatEpisodeName(selectedEpisode)}'
+                                    : '观看至 ${_formatEpisodeName(selectedEpisode)}',
+                                style: Theme.of(context)
+                                    .textTheme
+                                    .bodyMedium
+                                    ?.copyWith(color: appAccent),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
                     Row(
                       children: [
                         Expanded(
@@ -196,7 +307,12 @@ class _EmbyDetailPageState extends State<EmbyDetailPage> {
                                 ? null
                                 : () => _play(playTarget),
                             icon: const Icon(Icons.play_arrow_rounded),
-                            label: const Text('播放'),
+                            label: Text(
+                              (selectedEpisode != null &&
+                                      selectedEpisode.hasProgress)
+                                  ? '继续播放'
+                                  : '播放',
+                            ),
                             style: FilledButton.styleFrom(
                               backgroundColor: const Color(0xff08a66c),
                               minimumSize: const Size.fromHeight(52),
@@ -220,9 +336,20 @@ class _EmbyDetailPageState extends State<EmbyDetailPage> {
                         ),
                         const SizedBox(width: 8),
                         IconButton.filledTonal(
-                          tooltip: '标记',
-                          onPressed: () {},
-                          icon: const Icon(Icons.outlined_flag),
+                          tooltip: played ? '标记为未播放' : '标记为已播放',
+                          onPressed: updatingPlayed
+                              ? null
+                              : () => _togglePlayed(playedTarget),
+                          icon: updatingPlayed
+                              ? const SizedBox.square(
+                                  dimension: 18,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                  ),
+                                )
+                              : Icon(played
+                                  ? Icons.check_circle
+                                  : Icons.check_circle_outline),
                         ),
                       ],
                     ),
@@ -250,6 +377,7 @@ class _EmbyDetailPageState extends State<EmbyDetailPage> {
                         client: widget.client,
                         episodes: data.episodes,
                         selectedEpisodeId: selectedEpisode?.id,
+                        playedOverrides: _playedOverrides,
                         onTap: _selectEpisode,
                       ),
                     ],
@@ -321,19 +449,6 @@ class _DetailHero extends StatelessWidget {
               ),
             ),
           ),
-          SafeArea(
-            child: Align(
-              alignment: Alignment.topRight,
-              child: Padding(
-                padding: const EdgeInsets.all(8),
-                child: IconButton.filledTonal(
-                  tooltip: '更多',
-                  onPressed: () {},
-                  icon: const Icon(Icons.more_horiz),
-                ),
-              ),
-            ),
-          ),
         ],
       ),
     );
@@ -372,43 +487,100 @@ class _SeasonHeader extends StatelessWidget {
             if (season != null) onSelected(season);
           },
         ),
-        const Spacer(),
-        Text('${selected.name} · 选集', style: const TextStyle(color: appAccent)),
       ],
     );
   }
 }
 
-class _EpisodeList extends StatelessWidget {
+class _EpisodeList extends StatefulWidget {
   const _EpisodeList({
     required this.client,
     required this.episodes,
     required this.selectedEpisodeId,
     required this.onTap,
+    this.playedOverrides = const {},
   });
 
   final EmbyClient client;
   final List<EmbyItem> episodes;
   final String? selectedEpisodeId;
   final ValueChanged<EmbyItem> onTap;
+  final Map<String, bool> playedOverrides;
+
+  @override
+  State<_EpisodeList> createState() => _EpisodeListState();
+}
+
+class _EpisodeListState extends State<_EpisodeList> {
+  final ScrollController _scrollController = ScrollController();
+
+  @override
+  void initState() {
+    super.initState();
+    // 延迟滚动到选中的剧集
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _scrollToSelected();
+    });
+  }
+
+  @override
+  void didUpdateWidget(_EpisodeList oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.selectedEpisodeId != widget.selectedEpisodeId) {
+      _scrollToSelected();
+    }
+  }
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  void _scrollToSelected() {
+    if (widget.selectedEpisodeId == null || !_scrollController.hasClients) return;
+    final index = widget.episodes.indexWhere((ep) => ep.id == widget.selectedEpisodeId);
+    if (index < 0) return;
+
+    // 每个剧集宽度 210 + 间隔 10 = 220
+    const itemWidth = 220.0;
+    final targetScroll = (index * itemWidth) - 100; // 偏移 100 让选中项靠左显示
+    final maxScroll = _scrollController.position.maxScrollExtent;
+    final scrollOffset = targetScroll.clamp(0.0, maxScroll);
+
+    _scrollController.animateTo(
+      scrollOffset,
+      duration: const Duration(milliseconds: 300),
+      curve: Curves.easeOutCubic,
+    );
+  }
+
+  String _episodeTitle(EmbyItem episode, int index) {
+    return _formatEpisodeName(episode);
+  }
 
   @override
   Widget build(BuildContext context) {
-    if (episodes.isEmpty) return const Text('暂无剧集');
+    if (widget.episodes.isEmpty) return const Text('暂无剧集');
+    debugPrint('[EmbyDetail] 剧集列表: ${widget.episodes.length} 个剧集');
+    for (final ep in widget.episodes) {
+      debugPrint('[EmbyDetail]   ${ep.name}: played=${ep.played}, position=${ep.playbackPositionTicks}, percentage=${ep.playedPercentage}, hasProgress=${ep.hasProgress}');
+    }
     return SizedBox(
-      height: 148,
+      height: 168,
       child: ListView.separated(
+        controller: _scrollController,
         scrollDirection: Axis.horizontal,
-        itemCount: episodes.length,
+        itemCount: widget.episodes.length,
         separatorBuilder: (_, _) => const SizedBox(width: 10),
         itemBuilder: (context, index) {
-          final episode = episodes[index];
-          final selected = episode.id == selectedEpisodeId;
+          final episode = widget.episodes[index];
+          final selected = episode.id == widget.selectedEpisodeId;
           return SizedBox(
             width: 210,
             child: InkWell(
               borderRadius: BorderRadius.circular(8),
-              onTap: () => onTap(episode),
+              onTap: () => widget.onTap(episode),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -422,23 +594,72 @@ class _EpisodeList extends StatelessWidget {
                       ),
                       child: ClipRRect(
                         borderRadius: BorderRadius.circular(6),
-                        child: Image.network(
-                          client.imageUri(episode).toString(),
-                          fit: BoxFit.cover,
-                          width: double.infinity,
-                          errorBuilder: (_, _, _) => Container(
-                            color: appAccent.withValues(alpha: 0.1),
-                            child: const Center(
-                              child: Icon(Icons.play_circle_outline),
+                        child: Stack(
+                          fit: StackFit.expand,
+                          children: [
+                            Image.network(
+                              widget.client.imageUri(episode).toString(),
+                              fit: BoxFit.cover,
+                              width: double.infinity,
+                              errorBuilder: (_, _, _) => Container(
+                                color: appAccent.withValues(alpha: 0.1),
+                                child: const Center(
+                                  child: Icon(Icons.play_circle_outline),
+                                ),
+                              ),
                             ),
-                          ),
+                            // 播放完成勾 - 右上角
+                            if (widget.playedOverrides[episode.id] ?? episode.played)
+                              Positioned(
+                                right: 4,
+                                top: 4,
+                                child: Container(
+                                  width: 22,
+                                  height: 22,
+                                  decoration: const BoxDecoration(
+                                    color: appAccent,
+                                    shape: BoxShape.circle,
+                                  ),
+                                  child: const Icon(
+                                    Icons.check,
+                                    color: Colors.white,
+                                    size: 14,
+                                  ),
+                                ),
+                              ),
+                            // 播放进度条 - 底部
+                            Positioned(
+                              left: 0,
+                              right: 0,
+                              bottom: 0,
+                              child: SizedBox(
+                                height: 3,
+                                child: (widget.playedOverrides[episode.id] ?? episode.played)
+                                    // 已播放完成：绿色满进度
+                                    ? const ColoredBox(color: appAccent)
+                                    // 未播放完：显示进度，未播放完留空白
+                                    : episode.hasProgress
+                                        ? LinearProgressIndicator(
+                                            value:
+                                                (episode.playedPercentage ?? 0) /
+                                                    100,
+                                            backgroundColor: Colors.white
+                                                .withValues(alpha: 0.3),
+                                            valueColor:
+                                                const AlwaysStoppedAnimation<
+                                                    Color>(appAccent),
+                                          )
+                                        : const SizedBox.shrink(),
+                              ),
+                            ),
+                          ],
                         ),
                       ),
                     ),
                   ),
                   const SizedBox(height: 6),
                   Text(
-                    '${episode.indexNumber ?? index + 1}. ${episode.name}',
+                    _episodeTitle(episode, index),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
@@ -465,6 +686,13 @@ class _PeopleList extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final visible = people.take(12).toList();
+    debugPrint('[People] 演职人员数量: ${visible.length}');
+    for (final p in visible) {
+      debugPrint('[People]   ${p.name}: id=${p.id}, type=${p.type}');
+      if (p.id.isNotEmpty) {
+        debugPrint('[People]   图片URL: ${client.personImageUri(p)}');
+      }
+    }
     return SizedBox(
       height: 126,
       child: ListView.separated(
@@ -480,12 +708,23 @@ class _PeopleList extends StatelessWidget {
                 CircleAvatar(
                   radius: 34,
                   backgroundColor: Colors.black12,
-                  backgroundImage: person.id.isEmpty
-                      ? null
-                      : NetworkImage(client.personImageUri(person).toString()),
                   child: person.id.isEmpty
                       ? const Icon(Icons.person_outline)
-                      : null,
+                      : ClipOval(
+                          child: Image.network(
+                            client.personImageUri(person).toString(),
+                            width: 68,
+                            height: 68,
+                            fit: BoxFit.cover,
+                            headers: {
+                              'X-Emby-Token': client.config.accessToken,
+                            },
+                            errorBuilder: (_, error, _) {
+                              debugPrint('[People] 头像加载失败: ${person.name}, error: $error');
+                              return const Icon(Icons.person_outline);
+                            },
+                          ),
+                        ),
                 ),
                 const SizedBox(height: 6),
                 Text(
@@ -667,13 +906,29 @@ class _EmbyDetailData {
 
 String _displayTitle(EmbyItem series, EmbyItem? episode) {
   if (episode == null) return series.name;
-  final episodeLabel = episode.indexNumber == null
-      ? '剧集'
-      : '第 ${episode.indexNumber} 集';
-  final episodeName = episode.name.trim();
-  return episodeName.isEmpty || episodeName == episodeLabel
-      ? '${series.name} $episodeLabel'
-      : '${series.name} $episodeLabel - $episodeName';
+  final episodeLabel = _formatEpisodeName(episode);
+  return '${series.name} $episodeLabel';
+}
+
+/// 格式化剧集名称
+/// 如果名称为空或纯数字，显示"第X集"
+/// 否则显示剧集名称
+String _formatEpisodeName(EmbyItem episode) {
+  final number = episode.indexNumber ?? 0;
+  final name = episode.name.trim();
+
+  // 如果名称为空，显示"第X集"
+  if (name.isEmpty) {
+    return '第$number集';
+  }
+
+  // 如果名称是纯数字（如"1"、"10"），说明是默认名称，显示"第X集"
+  if (RegExp(r'^\d+$').hasMatch(name)) {
+    return '第$number集';
+  }
+
+  // 否则显示剧集名称
+  return name;
 }
 
 String _metadata(EmbyItem detail, EmbyItem mediaItem) {

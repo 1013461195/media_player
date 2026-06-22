@@ -122,7 +122,25 @@ class EmbyClient {
     final data = await _requestJson(
       'GET',
       '/Users/${config.userId}/Items/Latest',
-      query: {'Limit': '20', 'Fields': _detailFields},
+      query: {'Limit': '20', 'Fields': _detailFields, 'EnableUserData': 'true'},
+    );
+    final list = data['Items'] as List<dynamic>? ?? [];
+    return list.map(_itemFromJson).toList();
+  }
+
+  /// 获取"继续播放"列表 - 包含在其他客户端播放过但未完成的内容
+  Future<List<EmbyItem>> resumeItems() async {
+    _assertAuthenticated();
+    final data = await _requestJson(
+      'GET',
+      '/Users/${config.userId}/Items/Resume',
+      query: {
+        'Recursive': 'true',
+        'Fields': _detailFields,
+        'EnableUserData': 'true',
+        'Limit': '20',
+        'MediaTypes': 'Video',
+      },
     );
     final list = data['Items'] as List<dynamic>? ?? [];
     return list.map(_itemFromJson).toList();
@@ -145,6 +163,7 @@ class EmbyClient {
         'Filters': 'IsFavorite',
         'IncludeItemTypes': 'Movie,Series,Episode,Video',
         'Fields': _detailFields,
+        'EnableUserData': 'true',
         'SortBy': 'SortName',
       },
     );
@@ -164,6 +183,7 @@ class EmbyClient {
         'Recursive': 'true',
         'IncludeItemTypes': 'Movie,Series,Video',
         'Fields': _detailFields,
+        'EnableUserData': 'true',
         'SortBy': 'SortName',
         'Limit': '100',
       },
@@ -177,6 +197,15 @@ class EmbyClient {
     await _requestJson(
       favorite ? 'POST' : 'DELETE',
       '/Users/${config.userId}/FavoriteItems/${item.id}',
+    );
+  }
+
+  /// 标记/取消标记已播放
+  Future<void> setPlayed(EmbyItem item, bool played) async {
+    _assertAuthenticated();
+    await _requestJson(
+      played ? 'POST' : 'DELETE',
+      '/Users/${config.userId}/PlayedItems/${item.id}',
     );
   }
 
@@ -207,6 +236,7 @@ class EmbyClient {
     final query = {
       'ParentId': library.id,
       'Fields': _detailFields,
+      'EnableUserData': 'true',
       'SortBy': 'SortName',
     };
     if (view == EmbyLibraryView.programs) {
@@ -235,6 +265,7 @@ class EmbyClient {
         'ParentId': parent.id,
         'Recursive': recursive ? 'true' : 'false',
         'Fields': _detailFields,
+        'EnableUserData': 'true',
         'SortBy': 'SortName',
       },
     );
@@ -244,12 +275,16 @@ class EmbyClient {
 
   Future<List<EmbyItem>> seriesEpisodes(EmbyItem series) async {
     _assertAuthenticated();
+    // 使用 /Users/{UserId}/Items API 以正确获取 UserData
     final data = await _requestJson(
       'GET',
-      '/Shows/${series.id}/Episodes',
+      '/Users/${config.userId}/Items',
       query: {
-        'UserId': config.userId,
+        'ParentId': series.id,
+        'IncludeItemTypes': 'Episode',
+        'Recursive': 'true',
         'Fields': _detailFields,
+        'EnableUserData': 'true',
         'SortBy': 'SortName',
       },
     );
@@ -262,19 +297,22 @@ class EmbyClient {
     final data = await _requestJson(
       'GET',
       '/Users/${config.userId}/Items/${item.id}',
-      query: {'Fields': _detailFields},
+      query: {'Fields': _detailFields, 'EnableUserData': 'true'},
     );
     return _itemFromJson(data);
   }
 
   Future<List<EmbyItem>> seriesSeasons(EmbyItem series) async {
     _assertAuthenticated();
+    // 使用 /Users/{UserId}/Items API 以正确获取 UserData
     final data = await _requestJson(
       'GET',
-      '/Shows/${series.id}/Seasons',
+      '/Users/${config.userId}/Items',
       query: {
-        'UserId': config.userId,
+        'ParentId': series.id,
+        'IncludeItemTypes': 'Season',
         'Fields': _detailFields,
+        'EnableUserData': 'true',
         'SortBy': 'SortName',
       },
     );
@@ -287,13 +325,16 @@ class EmbyClient {
     EmbyItem season,
   ) async {
     _assertAuthenticated();
+    // 使用 /Users/{UserId}/Items API 以正确获取 UserData
     final data = await _requestJson(
       'GET',
-      '/Shows/${series.id}/Episodes',
+      '/Users/${config.userId}/Items',
       query: {
-        'UserId': config.userId,
-        'SeasonId': season.id,
+        'ParentId': season.id,
+        'IncludeItemTypes': 'Episode',
+        'Recursive': 'true',
         'Fields': _detailFields,
+        'EnableUserData': 'true',
         'SortBy': 'IndexNumber',
       },
     );
@@ -323,13 +364,13 @@ class EmbyClient {
     );
   }
 
-  Uri personImageUri(EmbyPerson person, {int maxHeight = 240}) {
+  Uri personImageUri(EmbyPerson person, {int maxHeight = 240, int maxWidth = 200}) {
     return _buildUri(
-      '/Persons/${person.id}/Images/Primary',
+      '/Items/${person.id}/Images/Primary',
       query: {
         'maxHeight': '$maxHeight',
-        'quality': '82',
-        'api_key': config.accessToken,
+        'maxWidth': '$maxWidth',
+        'quality': '90',
       },
     );
   }
@@ -406,16 +447,18 @@ class EmbyClient {
     String playMethod = 'DirectPlay',
   }) async {
     _assertAuthenticated();
+    final body = {
+      'ItemId': item.id,
+      'PlayMethod': playMethod,
+      'PlaySessionId': playSessionId ?? item.id,
+      'PositionTicks': positionTicks,
+      'IsPaused': isPaused,
+    };
+    debugPrint('[Emby] 上报播放进度数据: $body');
     await _requestJson(
       'POST',
       '/Sessions/Playing/Progress',
-      body: {
-        'ItemId': item.id,
-        'PlayMethod': playMethod,
-        'PlaySessionId': playSessionId ?? item.id,
-        'PositionTicks': positionTicks,
-        'IsPaused': isPaused,
-      },
+      body: body,
     );
   }
 
@@ -425,14 +468,16 @@ class EmbyClient {
     String? playSessionId,
   }) async {
     _assertAuthenticated();
+    final body = {
+      'ItemId': item.id,
+      'PlaySessionId': playSessionId ?? item.id,
+      'PositionTicks': positionTicks,
+    };
+    debugPrint('[Emby] 上报播放停止数据: $body');
     await _requestJson(
       'POST',
       '/Sessions/Playing/Stopped',
-      body: {
-        'ItemId': item.id,
-        'PlaySessionId': playSessionId ?? item.id,
-        'PositionTicks': positionTicks,
-      },
+      body: body,
     );
   }
 
@@ -559,9 +604,21 @@ class EmbyClient {
         .map((source) => source as Map<String, dynamic>)
         .map(_mediaSourceFromJson)
         .toList();
+    final userData = map['UserData'] as Map<String, dynamic>?;
+    final name = map['Name'] as String? ?? '';
+    final played = userData?['Played'] as bool? ?? false;
+    final playbackPositionTicks =
+        (userData?['PlaybackPositionTicks'] as num?)?.toInt() ?? 0;
+    final playedPercentage =
+        (userData?['PlayedPercentage'] as num?)?.toDouble();
+
+    debugPrint('[Emby] 解析项目: $name');
+    debugPrint('[Emby]   UserData: $userData');
+    debugPrint('[Emby]   Played: $played, PositionTicks: $playbackPositionTicks, PlayedPercentage: $playedPercentage');
+
     return EmbyItem(
       id: map['Id'] as String? ?? '',
-      name: map['Name'] as String? ?? '',
+      name: name,
       type: map['Type'] as String? ?? '',
       overview: map['Overview'] as String? ?? '',
       communityRating: (map['CommunityRating'] as num?)?.toDouble(),
@@ -577,9 +634,10 @@ class EmbyClient {
           .toList(),
       people: people,
       mediaSources: mediaSources,
-      isFavorite:
-          (map['UserData'] as Map<String, dynamic>?)?['IsFavorite'] as bool? ??
-          false,
+      isFavorite: userData?['IsFavorite'] as bool? ?? false,
+      playbackPositionTicks: playbackPositionTicks,
+      playedPercentage: playedPercentage,
+      played: played,
     );
   }
 

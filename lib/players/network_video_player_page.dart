@@ -75,18 +75,23 @@ class _NetworkVideoPlayerPageState extends State<NetworkVideoPlayerPage> {
 
   Future<void> _reportPlaybackStart() async {
     try {
+      debugPrint('[Player] 上报播放开始: ${widget.item.name}');
       await widget.client.reportPlaybackStart(
         widget.item,
         playSessionId: _playSessionId,
         playMethod: _playMethod,
       );
-    } catch (_) {}
+      debugPrint('[Player] 上报播放开始成功');
+    } catch (e) {
+      debugPrint('[Player] 上报播放开始失败: $e');
+    }
   }
 
   Future<void> _reportPlaybackProgress() async {
     try {
       final position = _player.state.position;
       final isPaused = !_player.state.playing;
+      debugPrint('[Player] 上报播放进度: position=${position.inSeconds}s, isPaused=$isPaused');
       await widget.client.reportPlaybackProgress(
         widget.item,
         positionTicks: position.inMicroseconds * 10,
@@ -94,18 +99,25 @@ class _NetworkVideoPlayerPageState extends State<NetworkVideoPlayerPage> {
         playSessionId: _playSessionId,
         playMethod: _playMethod,
       );
-    } catch (_) {}
+      debugPrint('[Player] 上报播放进度成功');
+    } catch (e) {
+      debugPrint('[Player] 上报播放进度失败: $e');
+    }
   }
 
   Future<void> _reportPlaybackStopped() async {
     try {
       final position = _player.state.position;
+      debugPrint('[Player] 上报播放停止: position=${position.inSeconds}s');
       await widget.client.reportPlaybackStopped(
         widget.item,
         positionTicks: position.inMicroseconds * 10,
         playSessionId: _playSessionId,
       );
-    } catch (_) {}
+      debugPrint('[Player] 上报播放停止成功');
+    } catch (e) {
+      debugPrint('[Player] 上报播放停止失败: $e');
+    }
   }
 
   bool _isDolbyVisionContent(String uri) {

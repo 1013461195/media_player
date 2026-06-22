@@ -24,15 +24,16 @@ class EmbyHomePage extends StatefulWidget {
 }
 
 class _EmbyHomePageState extends State<EmbyHomePage> {
-  late Future<({List<EmbyItem> latest, List<EmbyItem> libraries})> _future =
+  late Future<({List<EmbyItem> resume, List<EmbyItem> latest, List<EmbyItem> libraries})> _future =
       _load();
   Future<List<EmbyItem>>? _favoritesFuture;
   bool _showFavorites = false;
 
-  Future<({List<EmbyItem> latest, List<EmbyItem> libraries})> _load() async {
+  Future<({List<EmbyItem> resume, List<EmbyItem> latest, List<EmbyItem> libraries})> _load() async {
+    final resume = await widget.client.resumeItems();
     final latest = await widget.client.latest();
     final libraries = await widget.client.libraries();
-    return (latest: latest, libraries: libraries);
+    return (resume: resume, latest: latest, libraries: libraries);
   }
 
   Future<void> _switchServer() async {
@@ -130,7 +131,7 @@ class _EmbyHomePageState extends State<EmbyHomePage> {
           currentServer: widget.client.config,
         ),
       ),
-      child: FutureBuilder<({List<EmbyItem> latest, List<EmbyItem> libraries})>(
+      child: FutureBuilder<({List<EmbyItem> resume, List<EmbyItem> latest, List<EmbyItem> libraries})>(
         future: _future,
         builder: (context, snapshot) {
           if (snapshot.connectionState != ConnectionState.done) {
@@ -157,6 +158,16 @@ class _EmbyHomePageState extends State<EmbyHomePage> {
             children: [
               _EmbyTabs(showFavorites: false, onChanged: _selectSection),
               const SizedBox(height: 18),
+              if (data.resume.isNotEmpty) ...[
+                EmbyHorizontalSection(
+                  title: '继续播放',
+                  items: data.resume,
+                  client: widget.client,
+                  onTap: _openEmbyItem,
+                  continueLayout: true,
+                ),
+                const SizedBox(height: 20),
+              ],
               if (data.libraries.isNotEmpty) ...[
                 Text(
                   '我的媒体',
@@ -193,7 +204,7 @@ class _EmbyHomePageState extends State<EmbyHomePage> {
                 const SizedBox(height: 20),
               ],
               EmbyHorizontalSection(
-                title: '继续观看',
+                title: '最近添加',
                 items: data.latest,
                 client: widget.client,
                 onTap: _openEmbyItem,
@@ -504,6 +515,31 @@ class EmbyPosterCard extends StatelessWidget {
   final double? width;
   final bool landscape;
 
+  String _getItemDisplayName(EmbyItem item) {
+    // 如果是剧集，显示 "电视剧名称 - 第X集" 或 "电视剧名称 - 剧集名称"
+    if (item.isEpisode) {
+      final episodeName = item.name.trim();
+      String episodeLabel;
+
+      // 判断剧集名称是否为纯数字或为空
+      if (episodeName.isEmpty || RegExp(r'^\d+$').hasMatch(episodeName)) {
+        final number = item.indexNumber ?? 0;
+        episodeLabel = '第$number集';
+      } else {
+        episodeLabel = episodeName;
+      }
+
+      // 如果有系列名称，显示 "系列名 - 剧集标识"
+      if (item.seriesName.isNotEmpty) {
+        return '${item.seriesName} - $episodeLabel';
+      }
+      return episodeLabel;
+    }
+
+    // 其他类型直接返回名称
+    return item.name;
+  }
+
   @override
   Widget build(BuildContext context) {
     return SizedBox(
@@ -549,6 +585,48 @@ class EmbyPosterCard extends StatelessWidget {
                           ),
                         ),
                       ),
+                    // 播放完成勾 - 右上角
+                    if (item.played)
+                      Positioned(
+                        right: 4,
+                        top: 4,
+                        child: Container(
+                          width: 22,
+                          height: 22,
+                          decoration: const BoxDecoration(
+                            color: appAccent,
+                            shape: BoxShape.circle,
+                          ),
+                          child: const Icon(
+                            Icons.check,
+                            color: Colors.white,
+                            size: 14,
+                          ),
+                        ),
+                      ),
+                    // 播放进度条 - 底部
+                    Positioned(
+                      left: 0,
+                      right: 0,
+                      bottom: 0,
+                      child: SizedBox(
+                        height: 3,
+                        child: item.played
+                            // 已播放完成：绿色满进度
+                            ? const ColoredBox(color: appAccent)
+                            // 未播放完：显示进度，未播放完留空白
+                            : item.hasProgress
+                                ? LinearProgressIndicator(
+                                    value: (item.playedPercentage ?? 0) / 100,
+                                    backgroundColor:
+                                        Colors.white.withValues(alpha: 0.3),
+                                    valueColor:
+                                        const AlwaysStoppedAnimation<Color>(
+                                            appAccent),
+                                  )
+                                : const SizedBox.shrink(),
+                      ),
+                    ),
                   ],
                 ),
               ),
@@ -557,7 +635,7 @@ class EmbyPosterCard extends StatelessWidget {
             SizedBox(
               height: landscape ? 22 : 42,
               child: Text(
-                item.name,
+                _getItemDisplayName(item),
                 maxLines: landscape ? 1 : 2,
                 overflow: TextOverflow.ellipsis,
                 style: Theme.of(context).textTheme.bodyMedium?.copyWith(

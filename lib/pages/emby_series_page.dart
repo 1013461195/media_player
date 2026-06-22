@@ -53,15 +53,47 @@ class _EmbySeriesPageState extends State<EmbySeriesPage> {
               final episode = episodes[index];
               return Card(
                 child: ListTile(
-                  leading: const Icon(Icons.play_circle_outline),
+                  leading: _buildLeading(episode),
                   title: Text(episode.name),
-                  subtitle: episode.overview.isNotEmpty
-                      ? Text(
-                          episode.overview,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                        )
-                      : null,
+                  subtitle: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      // 播放进度条
+                      Padding(
+                        padding: const EdgeInsets.only(top: 4),
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(2),
+                          child: SizedBox(
+                            height: 3,
+                            child: episode.played
+                                // 已播放完成：绿色满进度
+                                ? const ColoredBox(color: appAccent)
+                                // 未播放完：显示进度，未播放完留空白
+                                : episode.hasProgress
+                                    ? LinearProgressIndicator(
+                                        value:
+                                            (episode.playedPercentage ?? 0) / 100,
+                                        backgroundColor: Colors.grey[300],
+                                        valueColor:
+                                            const AlwaysStoppedAnimation<Color>(
+                                                appAccent),
+                                      )
+                                    : ColoredBox(color: Colors.grey[300]!),
+                          ),
+                        ),
+                      ),
+                      if (episode.overview.isNotEmpty)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 4),
+                          child: Text(
+                            episode.overview,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                    ],
+                  ),
                   onTap: () {
                     Navigator.of(context).push(
                       MaterialPageRoute<void>(
@@ -80,6 +112,60 @@ class _EmbySeriesPageState extends State<EmbySeriesPage> {
           );
         },
       ),
+    );
+  }
+
+  Widget _buildLeading(EmbyItem episode) {
+    final position = episode.playbackPositionTicks;
+    final total = episode.runTimeTicks;
+    String? timeText;
+    if (position > 0 && total != null && total > 0) {
+      final posMin = position ~/ 600000000;
+      final totalMin = total ~/ 600000000;
+      timeText = '$posMin/$totalMin分钟';
+    }
+    return Stack(
+      children: [
+        SizedBox(
+          width: 48,
+          height: 48,
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(
+                episode.played
+                    ? Icons.check_circle_outline
+                    : Icons.play_circle_outline,
+                color: episode.played ? appAccent : null,
+              ),
+              if (timeText != null)
+                Text(
+                  timeText,
+                  style: const TextStyle(fontSize: 10),
+                ),
+            ],
+          ),
+        ),
+        // 播放完成勾 - 右上角
+        if (episode.played)
+          Positioned(
+            right: 0,
+            top: 0,
+            child: Container(
+              width: 16,
+              height: 16,
+              decoration: const BoxDecoration(
+                color: appAccent,
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(
+                Icons.check,
+                color: Colors.white,
+                size: 10,
+              ),
+            ),
+          ),
+      ],
     );
   }
 }

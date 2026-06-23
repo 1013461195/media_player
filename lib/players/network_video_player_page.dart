@@ -8,6 +8,7 @@ import 'package:screen_brightness/screen_brightness.dart';
 import 'package:volume_controller/volume_controller.dart';
 
 import '../emby_client.dart';
+import '../emby_stream_proxy.dart';
 import '../models.dart';
 import '../utils.dart';
 import '../widgets/common.dart';
@@ -46,6 +47,7 @@ class _NetworkVideoPlayerPageState extends State<NetworkVideoPlayerPage> {
   Timer? _progressTimer;
   String _playSessionId = DateTime.now().microsecondsSinceEpoch.toString();
   String _playMethod = 'DirectPlay';
+  LocalEmbyStreamProxy? _streamProxy;
 
   @override
   void initState() {
@@ -60,6 +62,7 @@ class _NetworkVideoPlayerPageState extends State<NetworkVideoPlayerPage> {
   void dispose() {
     _progressTimer?.cancel();
     _reportPlaybackStopped();
+    unawaited(_streamProxy?.close());
     unawaited(SystemChrome.setPreferredOrientations(DeviceOrientation.values));
     unawaited(ScreenBrightness.instance.resetApplicationScreenBrightness());
     unawaited(_player.dispose());
@@ -91,7 +94,9 @@ class _NetworkVideoPlayerPageState extends State<NetworkVideoPlayerPage> {
     try {
       final position = _player.state.position;
       final isPaused = !_player.state.playing;
-      debugPrint('[Player] 上报播放进度: position=${position.inSeconds}s, isPaused=$isPaused');
+      debugPrint(
+        '[Player] 上报播放进度: position=${position.inSeconds}s, isPaused=$isPaused',
+      );
       await widget.client.reportPlaybackProgress(
         widget.item,
         positionTicks: position.inMicroseconds * 10,
@@ -146,18 +151,60 @@ class _NetworkVideoPlayerPageState extends State<NetworkVideoPlayerPage> {
     }
   }
 
+  String _streamFileName(Uri uri) {
+    final sourceName = uri.pathSegments.isEmpty ? '' : uri.pathSegments.last;
+    if (sourceName.contains('.')) {
+      return sourceName;
+    }
+    final itemPath = widget.item.path;
+    final itemExt = itemPath.contains('.')
+        ? '.${itemPath.split('.').last}'
+        : '';
+    final itemName = widget.item.name.trim().isEmpty
+        ? 'video$itemExt'
+        : '${widget.item.name}$itemExt';
+    return itemName.replaceAll(RegExp(r'[\\/]'), '_');
+  }
+
+  Future<Uri> _playbackUriFor(Uri sourceUri) async {
+    if (_quality != EmbyVideoQuality.original) {
+      await _streamProxy?.close();
+      _streamProxy = null;
+      return sourceUri;
+    }
+
+    final proxy = LocalEmbyStreamProxy();
+    try {
+      final proxiedUri = await proxy.urlFor(
+        sourceUri,
+        fileName: _streamFileName(sourceUri),
+      );
+      await _streamProxy?.close();
+      _streamProxy = proxy;
+      debugPrint('[Player] Using multi-range Emby proxy: $proxiedUri');
+      return proxiedUri;
+    } catch (error) {
+      await proxy.close();
+      debugPrint(
+        '[Player] Emby proxy unavailable, opening direct stream: $error',
+      );
+      return sourceUri;
+    }
+  }
+
   Future<void> _prepareVideo() async {
     _playMethod = (_quality.height != null || _quality.bitrate != null)
         ? 'Transcode'
         : 'DirectPlay';
-    final uri = widget.client.streamUri(
+    final sourceUri = widget.client.streamUri(
       widget.item,
       maxHeight: _quality.height,
       maxBitrate: _quality.bitrate,
       playSessionId: _playSessionId,
     );
+    final uri = await _playbackUriFor(sourceUri);
     debugPrint('[Player] Opening stream: $uri');
-    await _checkDolbyVisionSupport(uri.toString());
+    await _checkDolbyVisionSupport(sourceUri.toString());
     await _player.open(Media(uri.toString()), play: true);
     debugPrint('[Player] Stream opened successfully');
     _reportPlaybackStart();
@@ -380,6 +427,11 @@ class _NetworkVideoPlayerPageState extends State<NetworkVideoPlayerPage> {
                     isDeleting: false,
                     onBack: () => Navigator.of(context).pop(),
                     onDelete: null,
+                    trailing: _streamProxy == null
+                        ? null
+                        : NetworkSpeedBadge(
+                            statsStream: _streamProxy!.statsStream,
+                          ),
                   ),
                 ),
               Align(
@@ -401,6 +453,59 @@ class _NetworkVideoPlayerPageState extends State<NetworkVideoPlayerPage> {
         },
       ),
     );
+  }
+}
+
+class NetworkSpeedBadge extends StatelessWidget {
+  const NetworkSpeedBadge({required this.statsStream, super.key});
+
+  final Stream<EmbyStreamStats> statsStream;
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<EmbyStreamStats>(
+      stream: statsStream,
+      initialData: const EmbyStreamStats(
+        bytesPerSecond: 0,
+        activeConnections: 0,
+      ),
+      builder: (context, snapshot) {
+        final stats =
+            snapshot.data ??
+            const EmbyStreamStats(bytesPerSecond: 0, activeConnections: 0);
+        return Container(
+          width: 112,
+          alignment: Alignment.centerRight,
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          margin: const EdgeInsets.only(left: 8),
+          decoration: BoxDecoration(
+            color: Colors.black.withValues(alpha: 0.38),
+            borderRadius: BorderRadius.circular(6),
+          ),
+          child: Text(
+            '${_formatSpeed(stats.bytesPerSecond)} x${stats.activeConnections}',
+            maxLines: 1,
+            textAlign: TextAlign.right,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 12,
+              fontFeatures: [FontFeature.tabularFigures()],
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  String _formatSpeed(int bytesPerSecond) {
+    if (bytesPerSecond < 1024) {
+      return '$bytesPerSecond B/s';
+    }
+    if (bytesPerSecond < 1024 * 1024) {
+      return '${(bytesPerSecond / 1024).toStringAsFixed(1)} KB/s';
+    }
+    return '${(bytesPerSecond / (1024 * 1024)).toStringAsFixed(1)} MB/s';
   }
 }
 

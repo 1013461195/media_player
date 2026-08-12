@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:media_kit/media_kit.dart';
 
 import 'pages/server_home_page.dart';
+import 'widgets/common.dart';
 
 void main() {
   runZonedGuarded(
@@ -47,16 +48,31 @@ class NasPlayerApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xff0f766e),
+          seedColor: appAccent,
           brightness: Brightness.light,
         ),
+        scaffoldBackgroundColor: appBackground,
         useMaterial3: true,
+        fontFamilyFallback: const [
+          'SF Pro Text',
+          'PingFang SC',
+          'Helvetica Neue',
+        ],
         inputDecorationTheme: const InputDecorationTheme(
-          border: OutlineInputBorder(),
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.all(Radius.circular(14)),
+            borderSide: BorderSide.none,
+          ),
           filled: true,
+          fillColor: Color(0xfff7f7f9),
         ),
-        listTileTheme:
-            const ListTileThemeData(contentPadding: EdgeInsets.zero),
+        listTileTheme: const ListTileThemeData(contentPadding: EdgeInsets.zero),
+        appBarTheme: const AppBarTheme(
+          backgroundColor: appBackground,
+          foregroundColor: appTextPrimary,
+          elevation: 0,
+          centerTitle: false,
+        ),
       ),
       home: const ServerHomePage(),
     );

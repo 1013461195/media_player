@@ -8,6 +8,7 @@ import 'package:screen_brightness/screen_brightness.dart';
 import 'package:volume_controller/volume_controller.dart';
 
 import '../emby_client.dart';
+import '../emby_stream_proxy.dart';
 import '../models.dart';
 import '../utils.dart';
 import '../widgets/common.dart';
@@ -26,8 +27,7 @@ class NetworkVideoPlayerPage extends StatefulWidget {
   final EmbyItem item;
 
   @override
-  State<NetworkVideoPlayerPage> createState() =>
-      _NetworkVideoPlayerPageState();
+  State<NetworkVideoPlayerPage> createState() => _NetworkVideoPlayerPageState();
 }
 
 class _NetworkVideoPlayerPageState extends State<NetworkVideoPlayerPage> {
@@ -45,7 +45,9 @@ class _NetworkVideoPlayerPageState extends State<NetworkVideoPlayerPage> {
   EmbyVideoQuality _quality = EmbyVideoQuality.original;
   bool _dolbyVisionChecked = false;
   Timer? _progressTimer;
-  final String _playSessionId = DateTime.now().microsecondsSinceEpoch.toString();
+  String _playSessionId = DateTime.now().microsecondsSinceEpoch.toString();
+  String _playMethod = 'DirectPlay';
+  LocalEmbyStreamProxy? _streamProxy;
 
   @override
   void initState() {
@@ -60,8 +62,8 @@ class _NetworkVideoPlayerPageState extends State<NetworkVideoPlayerPage> {
   void dispose() {
     _progressTimer?.cancel();
     _reportPlaybackStopped();
-    unawaited(
-        SystemChrome.setPreferredOrientations(DeviceOrientation.values));
+    unawaited(_streamProxy?.close());
+    unawaited(SystemChrome.setPreferredOrientations(DeviceOrientation.values));
     unawaited(ScreenBrightness.instance.resetApplicationScreenBrightness());
     unawaited(_player.dispose());
     super.dispose();
@@ -76,35 +78,51 @@ class _NetworkVideoPlayerPageState extends State<NetworkVideoPlayerPage> {
 
   Future<void> _reportPlaybackStart() async {
     try {
+      debugPrint('[Player] 上报播放开始: ${widget.item.name}');
       await widget.client.reportPlaybackStart(
         widget.item,
         playSessionId: _playSessionId,
+        playMethod: _playMethod,
       );
-    } catch (_) {}
+      debugPrint('[Player] 上报播放开始成功');
+    } catch (e) {
+      debugPrint('[Player] 上报播放开始失败: $e');
+    }
   }
 
   Future<void> _reportPlaybackProgress() async {
     try {
       final position = _player.state.position;
       final isPaused = !_player.state.playing;
+      debugPrint(
+        '[Player] 上报播放进度: position=${position.inSeconds}s, isPaused=$isPaused',
+      );
       await widget.client.reportPlaybackProgress(
         widget.item,
         positionTicks: position.inMicroseconds * 10,
         isPaused: isPaused,
         playSessionId: _playSessionId,
+        playMethod: _playMethod,
       );
-    } catch (_) {}
+      debugPrint('[Player] 上报播放进度成功');
+    } catch (e) {
+      debugPrint('[Player] 上报播放进度失败: $e');
+    }
   }
 
   Future<void> _reportPlaybackStopped() async {
     try {
       final position = _player.state.position;
+      debugPrint('[Player] 上报播放停止: position=${position.inSeconds}s');
       await widget.client.reportPlaybackStopped(
         widget.item,
         positionTicks: position.inMicroseconds * 10,
         playSessionId: _playSessionId,
       );
-    } catch (_) {}
+      debugPrint('[Player] 上报播放停止成功');
+    } catch (e) {
+      debugPrint('[Player] 上报播放停止失败: $e');
+    }
   }
 
   bool _isDolbyVisionContent(String uri) {
@@ -133,14 +151,60 @@ class _NetworkVideoPlayerPageState extends State<NetworkVideoPlayerPage> {
     }
   }
 
+  String _streamFileName(Uri uri) {
+    final sourceName = uri.pathSegments.isEmpty ? '' : uri.pathSegments.last;
+    if (sourceName.contains('.')) {
+      return sourceName;
+    }
+    final itemPath = widget.item.path;
+    final itemExt = itemPath.contains('.')
+        ? '.${itemPath.split('.').last}'
+        : '';
+    final itemName = widget.item.name.trim().isEmpty
+        ? 'video$itemExt'
+        : '${widget.item.name}$itemExt';
+    return itemName.replaceAll(RegExp(r'[\\/]'), '_');
+  }
+
+  Future<Uri> _playbackUriFor(Uri sourceUri) async {
+    if (_quality != EmbyVideoQuality.original) {
+      await _streamProxy?.close();
+      _streamProxy = null;
+      return sourceUri;
+    }
+
+    final proxy = LocalEmbyStreamProxy();
+    try {
+      final proxiedUri = await proxy.urlFor(
+        sourceUri,
+        fileName: _streamFileName(sourceUri),
+      );
+      await _streamProxy?.close();
+      _streamProxy = proxy;
+      debugPrint('[Player] Using multi-range Emby proxy: $proxiedUri');
+      return proxiedUri;
+    } catch (error) {
+      await proxy.close();
+      debugPrint(
+        '[Player] Emby proxy unavailable, opening direct stream: $error',
+      );
+      return sourceUri;
+    }
+  }
+
   Future<void> _prepareVideo() async {
-    final uri = widget.client.streamUri(
+    _playMethod = (_quality.height != null || _quality.bitrate != null)
+        ? 'Transcode'
+        : 'DirectPlay';
+    final sourceUri = widget.client.streamUri(
       widget.item,
       maxHeight: _quality.height,
       maxBitrate: _quality.bitrate,
+      playSessionId: _playSessionId,
     );
+    final uri = await _playbackUriFor(sourceUri);
     debugPrint('[Player] Opening stream: $uri');
-    await _checkDolbyVisionSupport(uri.toString());
+    await _checkDolbyVisionSupport(sourceUri.toString());
     await _player.open(Media(uri.toString()), play: true);
     debugPrint('[Player] Stream opened successfully');
     _reportPlaybackStart();
@@ -149,6 +213,12 @@ class _NetworkVideoPlayerPageState extends State<NetworkVideoPlayerPage> {
 
   Future<void> _changeQuality(EmbyVideoQuality quality) async {
     if (quality == _quality) return;
+    // Stop current stream and report to Emby server
+    _progressTimer?.cancel();
+    await _reportPlaybackStopped();
+    await _player.stop();
+    // Generate new session for the new stream
+    _playSessionId = DateTime.now().microsecondsSinceEpoch.toString();
     setState(() {
       _quality = quality;
       _prepareFuture = _prepareVideo();
@@ -186,8 +256,7 @@ class _NetworkVideoPlayerPageState extends State<NetworkVideoPlayerPage> {
     _gestureStartPosition = _player.state.position;
     _gestureMode = VideoGestureMode.none;
     try {
-      _gestureStartBrightness =
-          await ScreenBrightness.instance.application;
+      _gestureStartBrightness = await ScreenBrightness.instance.application;
     } catch (_) {
       _gestureStartBrightness = 0.5;
     }
@@ -224,13 +293,17 @@ class _NetworkVideoPlayerPageState extends State<NetworkVideoPlayerPage> {
           '${seconds >= 0 ? '+' : ''}$seconds s  ${formatDuration(target)}',
         );
       case VideoGestureMode.brightness:
-        final next =
-            (_gestureStartBrightness - delta.dy / size.height).clamp(0.0, 1.0);
+        final next = (_gestureStartBrightness - delta.dy / size.height).clamp(
+          0.0,
+          1.0,
+        );
         await ScreenBrightness.instance.setApplicationScreenBrightness(next);
         _setGestureText('亮度 ${(next * 100).round()}%');
       case VideoGestureMode.volume:
-        final next =
-            (_gestureStartVolume - delta.dy / size.height).clamp(0.0, 1.0);
+        final next = (_gestureStartVolume - delta.dy / size.height).clamp(
+          0.0,
+          1.0,
+        );
         await VolumeController.instance.setVolume(next);
         _setGestureText('音量 ${(next * 100).round()}%');
       case VideoGestureMode.none:
@@ -279,13 +352,10 @@ class _NetworkVideoPlayerPageState extends State<NetworkVideoPlayerPage> {
               final q = EmbyVideoQuality.all[index];
               return ListTile(
                 title: Text(q.label),
-                leading: Radio<EmbyVideoQuality>(
-                  value: q,
-                  groupValue: _quality,
-                  onChanged: (value) {
-                    Navigator.of(context).pop();
-                    if (value != null) _changeQuality(value);
-                  },
+                leading: Icon(
+                  q == _quality
+                      ? Icons.radio_button_checked
+                      : Icons.radio_button_unchecked,
                 ),
                 onTap: () {
                   Navigator.of(context).pop();
@@ -312,8 +382,7 @@ class _NetworkVideoPlayerPageState extends State<NetworkVideoPlayerPage> {
           if (snapshot.hasError) {
             return ErrorState(
               message: '视频加载失败：${friendlyError(snapshot.error)}',
-              onRetry: () =>
-                  setState(() => _prepareFuture = _prepareVideo()),
+              onRetry: () => setState(() => _prepareFuture = _prepareVideo()),
               dark: true,
             );
           }
@@ -346,8 +415,7 @@ class _NetworkVideoPlayerPageState extends State<NetworkVideoPlayerPage> {
                     ),
                     child: Text(
                       _gestureText!,
-                      style:
-                          const TextStyle(color: Colors.white, fontSize: 18),
+                      style: const TextStyle(color: Colors.white, fontSize: 18),
                     ),
                   ),
                 ),
@@ -359,6 +427,11 @@ class _NetworkVideoPlayerPageState extends State<NetworkVideoPlayerPage> {
                     isDeleting: false,
                     onBack: () => Navigator.of(context).pop(),
                     onDelete: null,
+                    trailing: _streamProxy == null
+                        ? null
+                        : NetworkSpeedBadge(
+                            statsStream: _streamProxy!.statsStream,
+                          ),
                   ),
                 ),
               Align(
@@ -380,6 +453,59 @@ class _NetworkVideoPlayerPageState extends State<NetworkVideoPlayerPage> {
         },
       ),
     );
+  }
+}
+
+class NetworkSpeedBadge extends StatelessWidget {
+  const NetworkSpeedBadge({required this.statsStream, super.key});
+
+  final Stream<EmbyStreamStats> statsStream;
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<EmbyStreamStats>(
+      stream: statsStream,
+      initialData: const EmbyStreamStats(
+        bytesPerSecond: 0,
+        activeConnections: 0,
+      ),
+      builder: (context, snapshot) {
+        final stats =
+            snapshot.data ??
+            const EmbyStreamStats(bytesPerSecond: 0, activeConnections: 0);
+        return Container(
+          width: 112,
+          alignment: Alignment.centerRight,
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          margin: const EdgeInsets.only(left: 8),
+          decoration: BoxDecoration(
+            color: Colors.black.withValues(alpha: 0.38),
+            borderRadius: BorderRadius.circular(6),
+          ),
+          child: Text(
+            '${_formatSpeed(stats.bytesPerSecond)} x${stats.activeConnections}',
+            maxLines: 1,
+            textAlign: TextAlign.right,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 12,
+              fontFeatures: [FontFeature.tabularFigures()],
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  String _formatSpeed(int bytesPerSecond) {
+    if (bytesPerSecond < 1024) {
+      return '$bytesPerSecond B/s';
+    }
+    if (bytesPerSecond < 1024 * 1024) {
+      return '${(bytesPerSecond / 1024).toStringAsFixed(1)} KB/s';
+    }
+    return '${(bytesPerSecond / (1024 * 1024)).toStringAsFixed(1)} MB/s';
   }
 }
 
@@ -433,8 +559,8 @@ class EmbyVideoControlBar extends StatelessWidget {
                     final value = max <= 0
                         ? 0.0
                         : position.inMilliseconds
-                            .clamp(0, duration.inMilliseconds)
-                            .toDouble();
+                              .clamp(0, duration.inMilliseconds)
+                              .toDouble();
                     return Row(
                       children: [
                         Text(
@@ -448,9 +574,8 @@ class EmbyVideoControlBar extends StatelessWidget {
                             onChanged: max <= 0
                                 ? null
                                 : (next) => player.seek(
-                                      Duration(
-                                          milliseconds: next.round()),
-                                    ),
+                                    Duration(milliseconds: next.round()),
+                                  ),
                           ),
                         ),
                         Text(
@@ -497,10 +622,8 @@ class EmbyVideoControlBar extends StatelessWidget {
                     return IconButton.filled(
                       tooltip: playing ? '暂停' : '播放',
                       iconSize: 32,
-                      icon: Icon(
-                          playing ? Icons.pause : Icons.play_arrow),
-                      onPressed: () =>
-                          playing ? player.pause() : player.play(),
+                      icon: Icon(playing ? Icons.pause : Icons.play_arrow),
+                      onPressed: () => playing ? player.pause() : player.play(),
                     );
                   },
                 ),

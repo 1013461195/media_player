@@ -2,6 +2,27 @@ enum VideoGestureMode { none, seek, brightness, volume }
 
 enum ServerKind { smb, emby }
 
+enum ServerCategory { fileService, mediaServer }
+
+extension ServerKindMetadata on ServerKind {
+  ServerCategory get category => switch (this) {
+    ServerKind.smb => ServerCategory.fileService,
+    ServerKind.emby => ServerCategory.mediaServer,
+  };
+
+  String get protocolLabel => switch (this) {
+    ServerKind.smb => 'SMB',
+    ServerKind.emby => 'Emby',
+  };
+}
+
+extension ServerCategoryMetadata on ServerCategory {
+  String get label => switch (this) {
+    ServerCategory.fileService => '文件服务',
+    ServerCategory.mediaServer => '媒体服务器',
+  };
+}
+
 enum FileListViewMode { list, detail, largeGrid, mediumGrid }
 
 enum EmbyLibraryView { programs, genres, folders }
@@ -30,6 +51,7 @@ class ServerConfig {
   final String userId;
 
   String get displayName => name.trim().isEmpty ? host : name;
+  ServerCategory get category => kind.category;
 
   ServerConfig copyWith({
     String? id,
@@ -91,15 +113,121 @@ class EmbyItem {
     required this.name,
     required this.type,
     required this.overview,
+    this.communityRating,
+    this.productionYear,
+    this.runTimeTicks,
+    this.officialRating = '',
+    this.path = '',
+    this.seriesName = '',
+    this.indexNumber,
+    this.parentIndexNumber,
+    this.genres = const [],
+    this.people = const [],
+    this.mediaSources = const [],
+    this.isFavorite = false,
+    this.playbackPositionTicks = 0,
+    this.playedPercentage,
+    this.played = false,
   });
 
   final String id;
   final String name;
   final String type;
   final String overview;
+  final double? communityRating;
+  final int? productionYear;
+  final int? runTimeTicks;
+  final String officialRating;
+  final String path;
+  final String seriesName;
+  final int? indexNumber;
+  final int? parentIndexNumber;
+  final List<String> genres;
+  final List<EmbyPerson> people;
+  final List<EmbyMediaSource> mediaSources;
+  final bool isFavorite;
+
+  /// 播放位置（ticks），1 tick = 100 纳秒
+  final int playbackPositionTicks;
+
+  /// 播放进度百分比 (0-100)
+  final double? playedPercentage;
+
+  /// 是否已播放完成
+  final bool played;
 
   bool get playable => const {'Movie', 'Episode', 'Video'}.contains(type);
   bool get isSeries => type == 'Series';
+  bool get isMovie => type == 'Movie';
+  bool get isEpisode => type == 'Episode';
+
+  /// 是否有播放进度（播放过但未完成）
+  bool get hasProgress =>
+      !played &&
+      playbackPositionTicks > 0 &&
+      playedPercentage != null &&
+      playedPercentage! > 0;
+
+  Duration? get runtime =>
+      runTimeTicks == null ? null : Duration(microseconds: runTimeTicks! ~/ 10);
+}
+
+class EmbyPerson {
+  const EmbyPerson({
+    required this.id,
+    required this.name,
+    required this.role,
+    required this.type,
+  });
+
+  final String id;
+  final String name;
+  final String role;
+  final String type;
+}
+
+class EmbyMediaSource {
+  const EmbyMediaSource({
+    required this.path,
+    required this.size,
+    required this.container,
+    required this.streams,
+  });
+
+  final String path;
+  final int? size;
+  final String container;
+  final List<EmbyMediaStream> streams;
+}
+
+class EmbyMediaStream {
+  const EmbyMediaStream({
+    required this.type,
+    required this.codec,
+    required this.displayTitle,
+    required this.language,
+    required this.width,
+    required this.height,
+    required this.channels,
+    required this.channelLayout,
+    required this.bitRate,
+    required this.sampleRate,
+    required this.profile,
+    required this.videoRange,
+  });
+
+  final String type;
+  final String codec;
+  final String displayTitle;
+  final String language;
+  final int? width;
+  final int? height;
+  final int? channels;
+  final String channelLayout;
+  final int? bitRate;
+  final int? sampleRate;
+  final String profile;
+  final String videoRange;
 }
 
 class EmbyException implements Exception {

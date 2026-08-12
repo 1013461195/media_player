@@ -392,6 +392,7 @@ class VideoTopBar extends StatelessWidget {
     required this.isDeleting,
     required this.onBack,
     required this.onDelete,
+    this.trailing,
     super.key,
   });
 
@@ -399,6 +400,7 @@ class VideoTopBar extends StatelessWidget {
   final bool isDeleting;
   final VoidCallback onBack;
   final VoidCallback? onDelete;
+  final Widget? trailing;
 
   @override
   Widget build(BuildContext context) {
@@ -432,17 +434,19 @@ class VideoTopBar extends StatelessWidget {
                 ),
               ),
             ),
-            IconButton(
-              tooltip: '删除',
-              color: Colors.white,
-              icon: isDeleting
-                  ? const SizedBox.square(
-                      dimension: 20,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Icon(Icons.delete_outline),
-              onPressed: onDelete,
-            ),
+            ?trailing,
+            if (onDelete != null || isDeleting)
+              IconButton(
+                tooltip: '删除',
+                color: Colors.white,
+                icon: isDeleting
+                    ? const SizedBox.square(
+                        dimension: 20,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.delete_outline),
+                onPressed: onDelete,
+              ),
           ],
         ),
       ),
